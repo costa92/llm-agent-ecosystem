@@ -1,0 +1,8 @@
+/.agents/
+/.codex/
+/llm-agent/
+/llm-agent-rag/
+/llm-agent-otel/
+/llm-agent-providers/
+/llm-agent-customer-support/
+/go.work.sum

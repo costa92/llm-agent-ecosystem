@@ -1,0 +1,9 @@
+go 1.26.0
+
+use (
+	./llm-agent
+	./llm-agent-customer-support
+	./llm-agent-otel
+	./llm-agent-providers
+	./llm-agent-rag
+)

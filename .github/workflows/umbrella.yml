@@ -1,0 +1,103 @@
+name: umbrella
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: umbrella-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-repo-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout umbrella root
+        uses: actions/checkout@v4
+
+      - name: Checkout llm-agent
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent
+          ref: main
+          path: llm-agent
+
+      - name: Checkout llm-agent-rag
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-rag
+          ref: master
+          path: llm-agent-rag
+
+      - name: Checkout llm-agent-otel
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-otel
+          ref: main
+          path: llm-agent-otel
+
+      - name: Checkout llm-agent-providers
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-providers
+          ref: main
+          path: llm-agent-providers
+
+      - name: Checkout llm-agent-customer-support
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-customer-support
+          ref: main
+          path: llm-agent-customer-support
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+
+      - name: Validate umbrella root files
+        run: |
+          test -f README.md
+          test -f PROJECT.md
+          test -f .planning/PROJECT.md
+          test -f .planning/README.md
+          test -f go.work
+
+      - name: Build llm-agent
+        working-directory: llm-agent
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-rag
+        working-directory: llm-agent-rag
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-otel
+        working-directory: llm-agent-otel
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-providers
+        working-directory: llm-agent-providers
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-customer-support
+        working-directory: llm-agent-customer-support
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
