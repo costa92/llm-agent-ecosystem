@@ -29,13 +29,15 @@ llm-agent-ecosystem/
 
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
-| `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.5.0** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
-| `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` | **v0.2.0** | `main` | <https://github.com/costa92/llm-agent-otel> |
-| `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.0** | `main` | <https://github.com/costa92/llm-agent-providers> |
-| `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.0** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
+| `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.5.1** | `main` | <https://github.com/costa92/llm-agent> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.2** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` | **v0.2.1** | `main` | <https://github.com/costa92/llm-agent-otel> |
+| `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
+| `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
 
-Tag layout as of v1.1 (ecosystem alignment milestone, 2026-05-21).
+Tag layout as of the v1.1 close (2026-05-20). v1.1 ecosystem
+alignment milestone shipped; v1.2 Core Capability Deepening is the
+active milestone.
 
 ## Dependency direction
 
@@ -123,9 +125,18 @@ This is the "coordinated bump + re-tag wave" pattern used in v1.1
 ## Status
 
 - v1.0 — `llm-agent-rag` API stabilization — **shipped** 2026-05-21.
-- v1.1 — Ecosystem alignment (this milestone) — **in flight**;
-  Phases 31-33 complete (4/5 requirements done), Phase 34 pending
-  (umbrella dependency-currency CI gate + audit + close).
+- v1.1 — Ecosystem alignment — **shipped** 2026-05-20.
+  All 5 ECO requirements delivered, all 7 KE keystones honored,
+  coordinated 5-repo tag set internally consistent end-to-end,
+  umbrella dependency-currency CI gate live and green. Audit:
+  `llm-agent/.planning/v1.1-MILESTONE-AUDIT.md` (PASS 5/5).
+- **v1.2 — Core Capability Deepening — in flight.** First
+  core-feature milestone since v0.3. Theme: Core v0.6 — capability
+  additions to core `llm-agent` (`budget`, `policy`,
+  `orchestrate.Supervisor`); memory tiering deferred to v1.3 per
+  KC-2. Phase 35 (budget / cancellation context, requirement CC-1)
+  in active execution; Phases 36-38 plan budget→policy→supervisor→
+  audit/close. Source of truth: `llm-agent/.planning/STATE.md`.
 
 ---
 *Workspace consolidated 2026-05-20 from prior `/tmp/` and `costa92/`
