@@ -8,6 +8,12 @@ product code.
 This root is the coordination point for the ecosystem, not a monorepo that
 absorbs subproject source trees.
 
+## Docs
+
+- [Docs index](./docs/README.md)
+- [Current project analysis](./docs/current-project-analysis.md)
+- [当前项目分析](./docs/current-project-analysis.zh-CN.md)
+
 ## Subprojects
 
 ```
