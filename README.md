@@ -22,7 +22,8 @@ llm-agent-ecosystem/
 ├── llm-agent-rag/                   # standalone RAG SDK (frozen v1.x public API)
 ├── llm-agent-otel/                  # capability-preserving OpenTelemetry wrappers
 ├── llm-agent-providers/             # OpenAI / Anthropic / Ollama / DeepSeek / MiniMax adapters
-└── llm-agent-customer-support/      # demo customer-support reference service
+├── llm-agent-customer-support/      # demo customer-support reference service
+└── llm-agent-flow/                  # serializable flow IR + DAG executor (v0.0.x)
 ```
 
 ## Repository roster
@@ -34,10 +35,11 @@ llm-agent-ecosystem/
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` | **v0.2.1** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
+| `llm-agent-flow` | serializable flow IR + DAG executor (walking skeleton) | **v0.0.1** | `main` | <https://github.com/costa92/llm-agent-flow> |
 
-Tag layout as of the v1.1 close (2026-05-20). v1.1 ecosystem
-alignment milestone shipped; v1.2 Core Capability Deepening is the
-active milestone.
+Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow` v0.0.1
+introduced 2026-05-21. v1.1 ecosystem alignment milestone shipped;
+v1.2 Core Capability Deepening is the active milestone.
 
 ## Dependency direction
 
@@ -45,6 +47,7 @@ active milestone.
 llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag
 llm-agent-providers         ──depends on──▶  llm-agent
+llm-agent-flow              ──depends on──▶  llm-agent
 llm-agent                   ──depends on──▶  llm-agent-rag (RAG facade only)
 llm-agent-rag               ──depends on──▶  (stdlib only at v1.0.0; `postgres` subpackage may pull pgx)
 ```

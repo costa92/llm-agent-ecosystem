@@ -9,6 +9,7 @@ all_repos=(
   llm-agent-otel
   llm-agent-providers
   llm-agent-customer-support
+  llm-agent-flow
 )
 
 launchable_repos=(
@@ -23,6 +24,7 @@ repo_url() {
     llm-agent-otel) printf '%s\n' 'https://github.com/costa92/llm-agent-otel.git' ;;
     llm-agent-providers) printf '%s\n' 'https://github.com/costa92/llm-agent-providers.git' ;;
     llm-agent-customer-support) printf '%s\n' 'https://github.com/costa92/llm-agent-customer-support.git' ;;
+    llm-agent-flow) printf '%s\n' 'https://github.com/costa92/llm-agent-flow.git' ;;
     *) printf '%s\n' "" ;;
   esac
 }
