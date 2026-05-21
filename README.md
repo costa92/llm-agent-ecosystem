@@ -35,11 +35,12 @@ llm-agent-ecosystem/
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` | **v0.2.1** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
-| `llm-agent-flow` | serializable flow IR + DAG executor (walking skeleton) | **v0.0.1** | `main` | <https://github.com/costa92/llm-agent-flow> |
+| `llm-agent-flow` | serializable flow IR + DAG executor (walking skeleton) | **v0.0.2** | `main` | <https://github.com/costa92/llm-agent-flow> |
 
-Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow` v0.0.1
-introduced 2026-05-21. v1.1 ecosystem alignment milestone shipped;
-v1.2 Core Capability Deepening is the active milestone.
+Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow`
+introduced 2026-05-21 (v0.0.1 walking skeleton → v0.0.2 per-layer
+parallelism + `cmd/flowd` HTTP). v1.1 ecosystem alignment milestone
+shipped; v1.2 Core Capability Deepening is the active milestone.
 
 ## Dependency direction
 
