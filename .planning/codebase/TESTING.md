@@ -1,8 +1,8 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-05-20
+**Analysis Date:** 2026-05-21
 
-This document describes testing as actually practiced across the five
+This document describes testing as actually practiced across the six
 subprojects. The umbrella ecosystem has no top-level test target of its
 own — `make test` is a thin wrapper that delegates to each subproject's
 `go test ./...`. CI happens at the sub-repo level plus one umbrella
@@ -12,10 +12,9 @@ cross-repo integration job.
 
 **Runner:**
 - Stdlib `testing` only. No `stretchr/testify`, no `ginkgo`, no
-  `gomega` in the core or in any test file inspected (the few
+  `gomega` in the core or in any hand-written test file (the few
   `stretchr/testify` lines visible in `llm-agent-providers/go.mod`
-  are *indirect* — pulled in by `testcontainers-go`, not used by
-  hand-written tests).
+  are *indirect* — pulled in by `testcontainers-go`).
 - Go toolchain: `go 1.26.0` pinned in every `go.mod`.
 - One module imports `go.uber.org/goleak` (v1.3.0) for goroutine-leak
   detection: `llm-agent-providers/internal/contract/main_test.go`
@@ -30,7 +29,8 @@ cross-repo integration job.
   - `if !reflect.DeepEqual(got, want) { ... }` for whole structs
   - `t.Helper()` in test-local fixture functions
     (`llm-agent/examples/06-budget/main_test.go:60-67`,
-    `llm-agent-rag/postgres/postgres_test.go:18-19`).
+    `llm-agent-rag/postgres/postgres_test.go:18-19`,
+    `llm-agent-flow/cmd/flowd/server/server_crud_test.go:40-74`).
 
 **Run Commands:**
 ```bash
@@ -41,12 +41,12 @@ make test                        # umbrella Makefile → scripts/eco.sh test all
 cd <subproject> && GOWORK=off go test ./...
 
 # Subset (selecting subprojects):
-make test TARGETS=llm-agent,llm-agent-rag
+make test TARGETS=llm-agent,llm-agent-rag,llm-agent-flow
 
 # Single test by name:
 go test -run TestSimpleAgent_Run_TransparentlyForwards ./...
 
-# Snapshot baseline update (llm-agent-rag only):
+# Snapshot baseline update (rag and flow both expose -update):
 go test ./internal/apisnapshot/ -run TestAPISnapshot -update
 
 # Live integration (gated by build tag + env):
@@ -57,39 +57,30 @@ LLM_AGENT_RAG_PG_URL=postgres://... go test ./postgres/...
 
 ## Test File Inventory
 
-The umbrella has **108 `*_test.go` files** outside `third_party/` and
-`.git/`. Per subproject:
+The umbrella has **153 `*_test.go` files** outside `third_party/` and
+`.git/` (was 108 at the v1.1 close — the +45 reflects v1.2 Phase 35
+budget tests in core, otelflow + flowrunner additions, and the entire
+`llm-agent-flow` test surface). Per subproject:
 
 | Subproject | Test files | Notes |
 |---|---|---|
-| `llm-agent` | 31 (16 in package root, plus `budget/`, `builtin/`, `bench/`, `comm/{a2a,anp,mcp,common}`, `context/`, `examples/06-budget/`, `llm/`, `memory/`, `orchestrate/`, `pkg/fanout/`, `rl/`) | core paradigm tests + builtin tools + orchestrate |
-| `llm-agent-rag` | 56 (largest test surface — every package has `*_test.go`) | rag, retrieve, store, ingest, embed, generate, prompt, pack, rerank, graph, eval, agentic, advanced, adapter/llmagent, contract, examples, feedback, guard, obs, pack, postgres, prompt, store, tree, internal/apisnapshot |
-| `llm-agent-otel` | 7 (`exporters_test.go`, `semconv_gen_ai_test.go`, plus one per wrapper subpackage: `otelagent`, `otelmetrics`, `otelmodel`, `otelrag`, `otelslog`) | every public wrapper has paired tests |
-| `llm-agent-providers` | 7 (one per adapter: `anthropic`, `deepseek`, `minimax`, `ollama`, `openai`, plus `internal/contract/{generate_test.go,main_test.go,ollama_live_test.go}`) | conformance + adapter-local |
-| `llm-agent-customer-support` | 11 (`cmd/server/main_test.go`, `compose/assets_test.go`, `internal/{app,config,guardrails,httpapi,knowledgebase,limits,sessionstore,supportflow}/*_test.go`) | reference-service tests |
+| `llm-agent` | 42 | core paradigm tests + builtin tools + orchestrate + `budget/` (v1.2 Phase 35 added the cross-paradigm budget tests) |
+| `llm-agent-rag` | 59 (the largest surface — every package has `*_test.go`) | rag, retrieve, store, ingest, embed, generate, prompt, pack, rerank, graph, eval, agentic, advanced, adapter/llmagent, contract, examples, feedback, guard, obs, pack, postgres, prompt, store, tree, internal/apisnapshot |
+| `llm-agent-otel` | 8 | `exporters_test.go`, `semconv_gen_ai_test.go`, plus one per wrapper subpackage: `otelagent`, `otelmetrics`, `otelmodel`, `otelrag`, `otelslog`, **`otelflow`** (new at v0.2.2) |
+| `llm-agent-providers` | 8 | one per adapter: `anthropic`, `deepseek`, `minimax`, `ollama`, `openai`, plus `internal/contract/{generate_test.go,main_test.go,ollama_live_test.go}` |
+| `llm-agent-customer-support` | 12 | `cmd/server/main_test.go`, `compose/assets_test.go`, `internal/{app,config,guardrails,httpapi,knowledgebase,limits,sessionstore,supportflow}/*_test.go`, plus **`internal/flowrunner/flowrunner_test.go`** (new at v0.2.3) |
+| `llm-agent-flow` | **24** | flow library + flowd HTTP server + sqlite store + tools + cond/cel + examples + internal/apisnapshot (whole new repo since v1.1 close) |
 
-### `llm-agent/` top-level test files (package `agents`)
+### `llm-agent-flow/` test surface in detail
 
-Paradigm coverage (one test file per paradigm + helpers):
+The 24 test files fall into four layers:
 
-| File | Coverage |
-|---|---|
-| `agent_test.go` | compile-time interface assertions for all 5 agents; sentinel-error `errors.Is` matrix; `StepKind` constants |
-| `agent_chatmodel_test.go` | `agents` ↔ `llm.ChatModel` bridge |
-| `simple_test.go` | `SimpleAgent` happy path, empty input, RunStream, ctx cancel, OnStep, budget exhaustion |
-| `react_test.go` | `ReActAgent` Thought/Action/Observation loop + native tool-call path; table-driven cases |
-| `reflection_test.go` | `ReflectionAgent` gen→critique→revise + budget gate (35-04 / CC-1) |
-| `plan_solve_test.go` | `PlanAndSolveAgent` plan + step exec; budget gate |
-| `function_call_test.go` | `FunctionCallAgent` no-tool-call, parallel tool calls, unknown-tool, budget |
-| `chain_test.go` | `Chain` piping, empty-chain error, satisfies `Tool` |
-| `async_test.go` | `AsyncRunner` parallel exec, ctx cancellation, panic recovery; counterTool / failingTool / panicTool / slowTool fixtures |
-| `registry_test.go` | `Registry` register, duplicate, sorted list, `AsLLMTools`, `PromptDescription` |
-| `tool_test.go` | `Tool` interface helpers, `NewFuncTool` |
-| `scriptedllm_test.go` | the in-package `scriptedLLM` mock + `textResp` helper |
-| `budget_integration_test.go` | **cross-paradigm uniformity** — every paradigm propagates identical sentinel shape under MaxCalls (CC-1) |
-| `example_simple_test.go` | runnable godoc `ExampleSimpleAgent` (deterministic `// Output:` block) |
-| `example_tool_use_test.go` | runnable godoc tool-use example |
-| `example_multi_agent_test.go` | runnable godoc multi-agent example |
+| Layer | Files | Coverage |
+|---|---|---|
+| **Library — flow engine** | `flow/engine_test.go` (113 LOC), `flow/engine_parallel_test.go` (252), `flow/engine_cond_test.go` (275), `flow/ir_test.go` (63), `flow/runner_test.go` (27), `flow/validate_test.go` (77) | engine topological exec; per-layer parallel exec; conditional edges + activation algorithm; Flow/Node/Edge JSON round-trip; `Runner` interface compile-pin |
+| **Library — tools, cond, store** | `flow/tools/{exec,http,manifest}_test.go`, `flow/cond/cel/{cel,helpers}_test.go`, `flow/store/sqlite/{store,events,events_batch}_test.go` | tool manifest loading; CEL adapter; SQLite Flow/Run CRUD; event append (single + bulk batch) |
+| **HTTP layer** | `cmd/flowd/server/{server,server_crud,server_events,server_replay,auth,lru}_test.go` | full REST surface via `httptest.NewServer`; bearer-token auth (8 cases); LRU engine cache (5 cases); per-event audit + replay |
+| **Examples + gate** | `examples/{echo_chain,http_tool,router}/example_test.go`, `internal/apisnapshot/apisnapshot_test.go` | runnable godoc examples; API snapshot gate (see below) |
 
 ## Test Structure
 
@@ -98,7 +89,10 @@ Examples: `TestSimpleAgent_Run_TransparentlyForwards`,
 `TestReActAgent_HappyPath_FinalAfterOneAction`,
 `TestRegistry_RegisterDuplicate_ReturnsErr`,
 `TestFunctionCallAgent_RunsToolCallsInParallel`,
-`TestChatOnlyMockExcludesCapabilities`.
+`TestAuthMissingHeaderIs401`,
+`TestEngineCacheLRUEviction`,
+`TestAppendRunEventsBatchHappyPath`,
+`TestReplayRunReproducesEvents`.
 
 **Suite Organization:** flat — no `setUp`/`tearDown`, no shared
 state. Each `Test...` function is self-contained:
@@ -135,43 +129,47 @@ tests := []struct {
     {name: "ollama", provider: config.ProviderOllama, model: "llama3.1:8b"},
 }
 for _, tc := range tests {
-    t.Run(tc.name, func(t *testing.T) {
-        model, err := DefaultModelFactory(config.Config{...})
-        ...
-    })
+    t.Run(tc.name, func(t *testing.T) { ... })
 }
 ```
 
-Files using `t.Run` (at least): `simple_test.go` (4), `react_test.go`
-(1), `budget_integration_test.go` (6), `function_call_test.go` (6),
-`example_simple_test.go`, `example_tool_use_test.go`,
-`llm-agent-customer-support/internal/app/app_test.go`,
-`llm-agent-rag/internal/apisnapshot/apisnapshot_test.go`,
-`llm-agent/llm/llm_test.go`, `llm-agent-providers/internal/contract/generate_test.go`.
+`llm-agent-flow` uses the same idiom heavily; e.g.
+`engine_cond_test.go` exercises the activation algorithm via 6
+condition shapes (`always`, `never`, `==<lit>`, `!=<lit>`, `bad`,
+`boom`) declared as a `[]struct{...}` and iterated with `t.Run`.
 
 **Table-driven:** the canonical form is `tests := []struct{...}` (or
 `cases := []struct{...}`), iterated with `for _, tc := range tests`.
-Used in `llm-agent/react_test.go`, `llm-agent-customer-support/internal/app/app_test.go`,
-`llm-agent/llm/llm_test.go`, `llm-agent-providers/internal/contract/generate_test.go`,
-`llm-agent-rag/...` (multiple files), and the new
-`budget_integration_test.go` "paradigmCase" sets — see
-`budget_integration_test.go:29-100` for a representative paradigm-
-factory table.
+Used in `llm-agent/react_test.go`,
+`llm-agent-customer-support/internal/app/app_test.go`,
+`llm-agent/llm/llm_test.go`,
+`llm-agent-providers/internal/contract/generate_test.go`,
+`llm-agent-rag/...` (multiple files), `llm-agent/budget_integration_test.go`,
+and across `llm-agent-flow` (e.g.
+`flow/engine_parallel_test.go`, `cmd/flowd/server/server_crud_test.go`).
 
 **`Example*` tests:** runnable godoc examples with `// Output:`
 blocks. Located at `llm-agent/example_simple_test.go`,
-`example_tool_use_test.go`, `example_multi_agent_test.go`, and
-`llm-agent/pkg/fanout/example_test.go`. They double as godoc and as
-deterministic smoke tests.
+`example_tool_use_test.go`, `example_multi_agent_test.go`,
+`llm-agent/pkg/fanout/example_test.go`, and (new)
+`llm-agent-flow/examples/{echo_chain,http_tool,router}/example_test.go`.
 
-**`t.Parallel()`:** observed in `llm-agent/function_call_test.go`
-only. Tests are otherwise serial — fast and deterministic, no
-need to opt into parallelism.
+**`t.Parallel()`:** observed sparingly. `llm-agent/function_call_test.go`,
+selected goroutine-leak-sensitive tests in
+`llm-agent-flow/flow/engine_parallel_test.go`. Tests are otherwise
+serial — fast and deterministic, no need to opt into parallelism.
 
 **`t.Helper()`:** used in fixture / assertion helpers
 (`llm-agent/examples/06-budget/main_test.go:60-67`,
 `llm-agent-rag/internal/apisnapshot/apisnapshot_test.go:20-27`,
-`llm-agent-rag/postgres/postgres_test.go:18`).
+`llm-agent-flow/internal/apisnapshot/apisnapshot_test.go`,
+`llm-agent-flow/cmd/flowd/server/server_crud_test.go:40-74`).
+
+**`t.Cleanup`** is the favored teardown idiom:
+- `t.Cleanup(srv.Close)` in `flowd` `httptest.NewServer` setups
+  (`cmd/flowd/server/server_test.go:19-40`).
+- `t.Cleanup(func() { _ = sr.Close() })` for streamed readers
+  (`llm-agent/llm/llm_test.go:55`).
 
 **Compile-time assertions (test side):**
 ```go
@@ -185,8 +183,12 @@ var (
 )
 ```
 
-These compile-time `var _ Iface = (*Impl)(nil)` patterns guarantee that
-the interface compatibility is checked even if no test body covers it.
+`llm-agent-flow/flow/runner.go` carries the same idiom in production
+code for the seam `otelflow.Wrap` consumes:
+
+```go
+var _ flow.Runner = (*Engine)(nil)
+```
 
 ## Mocking
 
@@ -217,46 +219,116 @@ when the response list is exhausted, so tests can assert via
 `errors.Is`.
 
 **The agents-package twin — `scriptedLLM`:**
-`llm-agent/scriptedllm_test.go` (lines 1-72) defines an *unexported*
-sibling `scriptedLLM` plus `textResp` helper, scoped to the `agents`
-package's test files. Used by every paradigm test inside the
-package to avoid pulling in the public `llm.ScriptedLLM` builder.
-Same shape as the public one — `sync.Mutex`, cursor, capability info
-— deliberately simpler.
+`llm-agent/scriptedllm_test.go` defines an *unexported* sibling
+`scriptedLLM` plus `textResp` helper, scoped to the `agents` package's
+test files.
 
-**HTTP-level mocks (provider adapters):**
-`net/http/httptest.NewServer` + `http.HandlerFunc` is the only
-network-mocking pattern. Every provider adapter has one — see
-`llm-agent-providers/openai/openai_test.go:60-101`,
-`llm-agent-providers/anthropic/anthropic_test.go`,
-`llm-agent-providers/ollama/ollama_test.go`,
-`llm-agent-providers/deepseek/deepseek_test.go`,
-`llm-agent-providers/minimax/minimax_test.go`. The handler asserts
-request shape (URL, method, headers, body fragments) and returns
-canned JSON; `sync/atomic` counters check call counts.
+**HTTP-level mocks (provider adapters + flowd):**
+`net/http/httptest.NewServer` + `http.HandlerFunc` is the canonical
+network-mocking pattern.
 
-**OTel test harness (`llm-agent-otel`):**
+- **Provider adapters:** every adapter has one — see
+  `llm-agent-providers/openai/openai_test.go:60-101`,
+  `llm-agent-providers/anthropic/anthropic_test.go`,
+  `llm-agent-providers/ollama/ollama_test.go`,
+  `llm-agent-providers/deepseek/deepseek_test.go`,
+  `llm-agent-providers/minimax/minimax_test.go`. The handler asserts
+  request shape (URL, method, headers, body fragments) and returns
+  canned JSON; `sync/atomic` counters check call counts.
+
+- **flowd HTTP server (new pattern):**
+  `llm-agent-flow/cmd/flowd/server/server_test.go:19-40` wraps the
+  server-under-test directly:
+
+  ```go
+  func newTestServer(t *testing.T) *httptest.Server {
+      reg := flow.NewNodeRegistry()
+      _ = flow.RegisterToolNode(reg)
+      engine, err := flow.LoadCompile(...)
+      ...
+      return httptest.NewServer(server.NewMux(engine, nil))
+  }
+  ```
+
+  `server_crud_test.go:40-74` extends the pattern with the full
+  `Server` (CRUD + persistence):
+
+  ```go
+  func newStoreServer(t *testing.T, opts ...serverOption) (*httptest.Server, flowstore.Store) {
+      store, err := sqlitestore.Open(":memory:")
+      ...
+      srv, err := server.New(server.Config{Store: store, Registry: reg, ...})
+      return httptest.NewServer(srv.Handler()), store
+  }
+  ```
+
+  This is **end-to-end-HTTP testing without booting the flowd binary** —
+  the same handler chain a real `cmd/flowd` invocation builds, exercised
+  in-process by Go's stdlib HTTP test machinery.
+
+**In-memory SQLite for store tests:**
+A new pattern in this analysis. `llm-agent-flow/flow/store/sqlite/store_test.go`
+opens `sqlite.Open(":memory:")` and exercises the full schema /
+migrations / CRUD path without touching disk:
+
+```go
+// flow/store/sqlite/store_test.go:14
+s, err := sqlite.Open(":memory:")
+```
+
+The `:memory:` DSN is **documented as part of the Store API contract**
+(`flow/store/sqlite/doc.go:20`, `flow/store/sqlite/open.go:28`); the
+implementation sets `SetMaxOpenConns(1)` for `:memory:` connections so
+the connection-per-test pattern stays race-free under the default
+journal mode (`events.go:17`). On-disk SQLite users get WAL + row-level
+locks; in-memory tests get serialized single-conn behavior.
+
+`flowd` HTTP tests stack this with `httptest.NewServer` — every CRUD /
+event / replay / auth test uses `:memory:` for total isolation
+(`cmd/flowd/server/server_crud_test.go:42`,
+`server_crud_test.go:369`). No `testdata/` SQL fixtures; the schema
+is regenerated on every `Open` call.
+
+**OTel test harness (`llm-agent-otel` + downstream):**
 - `tracetest.NewInMemoryExporter()` + `sdktrace.NewTracerProvider(WithSyncer(...))`
   builds an in-memory span collector. Each `otelmodel`/`otelrag`/
-  `otelagent` test fetches `exp.GetSpans()` and asserts span name,
-  attributes, events, and status.
-  See `llm-agent-otel/otelmodel/otelmodel_test.go:16-21`.
-- `go.opentelemetry.io/otel/trace/noop` is used when a test wires an
-  OTel-dependent component but doesn't want to assert on spans —
-  e.g. `llm-agent-customer-support/internal/app/app_test.go:18`.
+  `otelagent`/`otelflow` test fetches `exp.GetSpans()` and asserts
+  span name, attributes, events, and status.
+  See `llm-agent-otel/otelmodel/otelmodel_test.go:16-21` and the
+  newer `llm-agent-otel/otelflow/otelflow_test.go:14-17`.
+- The same in-memory exporter pattern is used by
+  `llm-agent-customer-support/internal/flowrunner/flowrunner_test.go`
+  to assert that the end-to-end customer-support → otelflow → flow
+  trace path emits the expected spans.
 
-**Tool fixtures in `agents` tests:**
-Local recording tools per file (none shared across files):
-- `recordingTool` (`react_test.go:14-27`) records `Execute` args.
-- `counterTool` / `failingTool` / `panicTool` / `slowTool`
-  (`async_test.go:14-65`).
-- `upperTool` / `reverseTool` (`chain_test.go:11-36`).
-- `fixedTool` (`registry_test.go`, referenced).
+**Stub-evaluator pattern (new in flow):**
+`llm-agent-flow/flow/engine_cond_test.go:1-80` introduces a deterministic
+in-package `stubEvaluator` that exercises the conditional-edge
+activation algorithm **without pulling cel-go into the core test
+binary**:
 
-**Stdout capture:**
-`llm-agent/examples/06-budget/main_test.go:21-58` shows the
-`os.Pipe()` + `os.Stdout = w` + goroutine `io.ReadAll(r)` pattern for
-capturing `main()` output and asserting on transcript fragments.
+```go
+// flow/engine_cond_test.go:13-22
+type stubEvaluator struct{}
+// Supports: "==<lit>", "!=<lit>", "always", "never", "bad", "boom"
+
+func (stubEvaluator) Compile(expr string) (Condition, error) { ... }
+```
+
+The cel-go integration lives in `flow/cond/cel/` (separate sub-package
+with its own tests at `flow/cond/cel/{cel,helpers}_test.go`). The
+core engine package tests cover edge-firing semantics via the stub —
+fast, dependency-free, and isolated from cel-go quirks. cel-go is
+still in `go.mod` (transitive), but the core engine test binary does
+not link it.
+
+**Tool fixtures:**
+- `recordingTool`, `counterTool` / `failingTool` / `panicTool` /
+  `slowTool`, `upperTool` / `reverseTool`, `fixedTool` (across
+  `llm-agent/{react,async,chain,registry}_test.go`).
+- `passthroughTool` and `fakeTool` for flow tests
+  (`llm-agent-flow/flow/engine_cond_test.go:62-79`,
+  `llm-agent-otel/otelflow/otelflow_test.go:38-50`).
 
 ## Fixtures and Factories
 
@@ -264,9 +336,11 @@ capturing `main()` output and asserting on transcript fragments.
 - `llm-agent-providers/internal/contract/testdata/` holds per-provider
   scenario fixtures: subdirectories `anthropic/`, `ollama/`, `openai/`.
   Used by `TestGenerate_Conformance` to replay request/response pairs
-  for happy paths, 401, 429, 500, 529 (`generate_test.go:66-100`).
+  for happy paths, 401, 429, 500, 529.
 - `llm-agent-rag/api/v1.snapshot.txt` is the committed exported-API
-  baseline; `TestAPISnapshot` regenerates and diffs against it.
+  baseline for rag.
+- `llm-agent-flow/api/v0.1.snapshot.txt` (207 lines) is the committed
+  exported-API baseline for flow.
 - No other `testdata/` directories detected across the umbrella.
 
 **Factories:**
@@ -276,48 +350,102 @@ capturing `main()` output and asserting on transcript fragments.
 - `llm-agent-customer-support/internal/app` uses dependency-injection
   options (`WithModelFactory`, `WithEmbedderFactory`,
   `WithSessionStoreFactory`, `WithTracerProviderFactory`) so tests
-  build a real `App` with scripted models — see
-  `app_test.go:66-86`.
+  build a real `App` with scripted models.
+- `llm-agent-flow/cmd/flowd/server` uses a `serverOption` functional-
+  options pattern in the test helpers
+  (`cmd/flowd/server/server_crud_test.go:40-74`) so individual tests
+  can mix in `withAuth("sekret")`, custom store, custom registry, etc.,
+  without duplicating the boilerplate.
+
+## API snapshot gate (now in two repos)
+
+Both `llm-agent-rag` and `llm-agent-flow` carry an in-tree snapshot
+gate that runs **as part of `go test ./...`** — no separate workflow
+step, no extra tool to install. Pure stdlib (`go/parser` +
+`go/printer`).
+
+**How it works:**
+
+1. The package (`internal/apisnapshot/`) walks the module's source
+   under `go/parser`, collects every exported declaration (`const`,
+   `var`, `func`, `type`, struct fields, interface methods), and
+   renders a deterministic text representation sorted by package +
+   kind + name.
+2. `TestAPISnapshot` compares the rendered text against the committed
+   baseline (`api/v1.snapshot.txt` for rag, `api/v0.1.snapshot.txt`
+   for flow).
+3. Any rename, removal, or re-sign of an exported symbol changes the
+   render, fails the test, and shows up as a diff in code review next
+   to the source diff.
+4. Deliberate additive changes regenerate the baseline via
+   `go test ./internal/apisnapshot/ -run TestAPISnapshot -update`.
+
+**Why this is "go test"-level instead of a separate CI step:**
+A workflow-level gate that runs `go run ./tools/snapshot` is fine but
+requires (a) the tool to exist as a binary, (b) the workflow to know
+to call it, and (c) reviewers to remember it's a gate. A gate that
+fires inside `go test ./...` means *every* developer running `go test`
+locally hits it, the local + CI behaviors are identical, and there is
+no separate binary to keep in sync. The flow snapshot's own docstring
+calls this out: *"The gate is pure stdlib (`go/parser` + `go/printer`)
+— no module dependency, no separate tool to install, runs in every
+`go test`."*
+
+**Skip rules:**
+- Files in `internal/` are excluded (non-importable externally).
+- `_test.go` files are excluded (not part of the public surface).
+- Build-tagged files (e.g. `//go:build llmagent`) **are included** —
+  `go/parser` ignores build constraints, so the build-tagged
+  `adapter/llmagent` slice in `llm-agent-rag` is covered. This was a
+  deliberate decision to prevent build-tagged code from drifting
+  un-policed (`llm-agent-rag/internal/apisnapshot/apisnapshot.go:18-23`).
 
 ## Integration vs Unit Split
 
 **Unit (the overwhelming majority):**
 - Live in the same package as the code under test (Go default).
 - Run in-process with `ScriptedLLM` / `scriptedLLM` / `recordingTool`
-  fixtures. No network, no docker.
+  / `stubEvaluator` fixtures. No network, no docker.
 - Default `go test ./...` runs them all.
 
 **Integration:**
-- `llm-agent/budget_integration_test.go` (filename-tagged "integration"
-  but in-process) — exercises every agent paradigm against the
-  shared budget chokepoint. See header comment lines 1-15: "cross-
-  paradigm uniformity test for the budget chokepoint (35-04 /
-  CC-1)". Runs as part of normal `go test ./...`.
+- `llm-agent/budget_integration_test.go` — cross-paradigm uniformity
+  test for the budget chokepoint (35-04 / CC-1). Runs as part of
+  normal `go test ./...`.
 - `llm-agent/examples/06-budget/main_test.go` — end-to-end demo
-  smoke test. Lives in the side `examples/` module so the core test
-  suite stays minimal; CI builds and tests `examples/` separately
-  (`llm-agent/.github/workflows/test.yml:32-49`).
-- `llm-agent-rag/internal/apisnapshot/apisnapshot_test.go` — API
-  freeze gate; runs in default `go test ./...`.
-- `llm-agent-rag/postgres/postgres_conformance_test.go` and
-  `postgres_test.go` — `t.Skipf` unless `LLM_AGENT_RAG_PG_URL` is
-  set (real Postgres + pgvector required). Conformance is opt-in.
+  smoke test in the side `examples/` module.
+- `llm-agent-rag/internal/apisnapshot/apisnapshot_test.go` and
+  `llm-agent-flow/internal/apisnapshot/apisnapshot_test.go` — API
+  freeze gates; run in default `go test ./...`.
+- `llm-agent-flow/cmd/flowd/server/*_test.go` — **httptest end-to-end
+  flowd**: every test boots a `*httptest.Server` wrapping the full
+  handler chain (mux + auth + store + engine cache + per-event
+  persistence), exercises real HTTP via `http.Get` / `http.Post`,
+  and asserts on response bodies + headers (`X-Run-ID`, `X-Replay`,
+  `WWW-Authenticate`). All persistence goes to `:memory:` SQLite.
+  Runs in default `go test ./...`.
+- `llm-agent-customer-support/internal/flowrunner/flowrunner_test.go`
+  — exercises `flowrunner.Runner` against a real `flow.Engine` and a
+  real OTel `tracetest.NewInMemoryExporter`. Tests the full
+  customer-support → otelflow → flow trace path. Runs in default
+  `go test ./...`.
+- `llm-agent-rag/postgres/postgres_conformance_test.go` — `t.Skipf`
+  unless `LLM_AGENT_RAG_PG_URL` is set (real Postgres + pgvector
+  required). Conformance is opt-in.
 - `llm-agent-rag/adapter/llmagent/{model,tool}_test.go` — build-
   tagged `//go:build llmagent`; the *only* slice that imports the
   core `github.com/costa92/llm-agent`. Run via
-  `go test -tags llmagent ./adapter/...` (the
-  `llm-agent-rag` CI workflow runs this explicitly as the last step).
+  `go test -tags llmagent ./adapter/...`.
 - `llm-agent-providers/internal/contract/ollama_live_test.go` —
   build-tagged `//go:build ollama_live`; spins a real Ollama
-  container via `testcontainers-go` (`testcontainers/testcontainers-go/modules/ollama`).
-  Runs only in the nightly workflow
-  (`llm-agent-providers/.github/workflows/nightly-ollama-live.yml`)
-  with `go test -v -timeout 30m -tags ollama_live -run TestGenerate_Ollama_Live`.
+  container via `testcontainers-go`. Runs only in the nightly
+  workflow.
 
 ## CI Test Execution
 
 **Every per-repo `test.yml` runs with `GOWORK=off`** (INFRA-02). The
-core gauntlet is identical across the four sister repos:
+core gauntlet is identical across the five sister repos plus
+`llm-agent-flow`:
 
 ```yaml
 env:
@@ -336,29 +464,29 @@ steps:
 
 **Variations:**
 - `llm-agent/.github/workflows/test.yml` adds an `examples` block that
-  runs the same gauntlet inside `examples/` (lines 32-49) and
-  retains `-count=1` only inside the umbrella job.
+  runs the same gauntlet inside `examples/`.
 - `llm-agent-rag/.github/workflows/test.yml` adds:
-  - "Verify core packages do not import llm-agent" `rg`-based gate
-    (lines 24-39).
+  - "Verify core packages do not import llm-agent" `rg`-based gate.
   - Explicit `API snapshot gate` step (visibility only — already
     runs inside `go test ./...`).
   - `Build-tagged adapter (llmagent)` step
     (`go build -tags llmagent ./...`, then
     `go test -tags llmagent ./adapter/...`).
+- `llm-agent-flow/.github/workflows/test.yml` is the minimal canonical
+  form — four-step gauntlet only. The API snapshot gate runs implicitly
+  inside `go test ./...` (the test lives in `internal/apisnapshot/`).
 - `llm-agent-customer-support/.github/workflows/test.yml` adds a
-  pre-build `format` job (`gofmt` drift), a `compose` validate job
-  (`docker compose -f compose/compose.yaml config`), and a `docker`
-  release-image build (`docker build -f compose/Dockerfile .`).
+  pre-build `format` job (`gofmt` drift), a `compose` validate job,
+  and a `docker` release-image build.
 - `llm-agent-providers/.github/workflows/nightly-ollama-live.yml`
-  runs only on schedule (`cron: '0 3 * * *'`) and
-  `workflow_dispatch`, with model-cache and the live-tag test.
+  runs only on schedule.
 
 **Umbrella cross-repo job** (`.github/workflows/umbrella.yml`):
-Checks out all five repos at their default branches and runs the same
-`GOWORK=off go vet/build/test ./... -count=1` for each one. This is the
-cross-repo integration safety net — catches breakages that pass each
-repo's solo CI but fail the umbrella.
+Checks out all five non-flow sister repos at their default branches
+and runs the same `GOWORK=off go vet/build/test ./... -count=1` for
+each one. **`llm-agent-flow` is NOT yet checked out by this workflow**
+(the workflow file has not been updated since the flow repo was
+introduced — see CONCERNS.md).
 
 ## Coverage Tools / Reports
 
@@ -367,32 +495,33 @@ plain `go test ./...` with no `-cover`, `-coverprofile`, or
 `-covermode` flag. The umbrella `Makefile` and `scripts/eco.sh test`
 do not pass coverage flags either.
 
-`.gitignore` reserves `coverage.txt` and `coverage.html` paths
-(`llm-agent/.gitignore`), but no committed CI step generates them.
-
 Coverage is implicitly tracked through:
 1. Strict CI on every PR (`go test ./...` must pass everywhere).
 2. The "every public wrapper has a paired test" convention in
-   `llm-agent-otel`.
+   `llm-agent-otel` (now including `otelflow`).
 3. The cross-paradigm `budget_integration_test.go` and the
-   `paradigmCase` table — adding a new agent paradigm forces a new
-   row, which forces test coverage of the chokepoint.
+   `paradigmCase` table.
+4. The API snapshot gate forces tests to be regenerated alongside
+   surface changes (otherwise the snapshot drifts and the gate
+   trips).
 
 ## Test Patterns: Quick Reference
 
 **Subtests vs flat tests:**
 - Subtests when the same arrange/act/assert applies across a fixture
-  set (provider matrix, scenario matrix, paradigm matrix).
+  set (provider matrix, scenario matrix, paradigm matrix, condition
+  matrix in `engine_cond_test`).
 - Flat tests when each scenario has its own setup.
 
 **Setup helpers:**
-- Per-file `func testConfig() (Config, *exporter)` etc., declared at
-  file top (e.g. `otelmodel_test.go:16-21`).
+- Per-file `func newTestServer(t *testing.T) *httptest.Server` etc.,
+  declared at file top (e.g. `flowd/server/server_test.go:19-40`).
 - `t.Helper()` inside helpers so `t.Fatalf` reports the caller's line.
 
 **Cleanup:**
-- `t.Cleanup(func() { _ = sr.Close() })` for streamed readers
-  (`llm-agent/llm/llm_test.go:55`).
+- `t.Cleanup(srv.Close)` and `defer resp.Body.Close()` in HTTP tests
+  (every flowd test file).
+- `t.Cleanup(func() { _ = sr.Close() })` for streamed readers.
 - `defer cancel()` and `defer mu.Unlock()` everywhere.
 
 **Error-path patterns:**
@@ -401,20 +530,19 @@ Coverage is implicitly tracked through:
   if !errors.Is(err, budget.ErrCallsExceeded) {
       t.Fatalf("err = %v, want ErrCallsExceeded", err)
   }
+  if !errors.Is(err, flowstore.ErrNotFound) {
+      t.Fatalf("err = %v, want ErrNotFound", err)
+  }
   ```
 - For the budget chokepoint, assert BOTH the dimensional sentinel and
-  the umbrella sentinel
-  (`budget_integration_test.go` and per-paradigm files).
+  the umbrella sentinel.
 
 **Async/streaming tests:**
-- Drain channels with `for range` to assert close:
-  ```go
-  // simple_test.go:64-66
-  ch, _ := a.RunStream(ctx, "x")
-  cancel()
-  for range ch { } // drain — channel must close, not deadlock
-  ```
+- Drain channels with `for range` to assert close.
 - Use `sync/atomic.Int32` counters in HTTP mocks to count requests.
+- SSE assertions in flowd use `bufio.Scanner` over the response body
+  (`cmd/flowd/server/server_replay_test.go:36-40`); test asserts on
+  `event:` / `data:` prefix lines and on `X-Replay: true` header.
 
 ## Gaps
 
@@ -426,33 +554,47 @@ What is **not** tested at the umbrella level:
    the umbrella tree. The closest thing is
    `.github/workflows/umbrella.yml`, but that simply re-runs each
    subproject's `go test ./...`.
-2. **No coverage measurement.** No `-cover` flag is ever set; no
+2. **`llm-agent-flow` is missing from the umbrella CI workflow.**
+   `.github/workflows/umbrella.yml` checks out five sister repos but
+   not flow; flow's tests run only via its own per-repo `test.yml`.
+   A cross-repo integration regression touching flow + otelflow +
+   flowrunner would not be caught by the umbrella job.
+3. **No coverage measurement.** No `-cover` flag is ever set; no
    `coverage.txt` is uploaded anywhere; no `codecov`/`coveralls`
    integration is configured.
-3. **No fuzz tests.** `go test -fuzz` is not invoked in any CI
+4. **No fuzz tests.** `go test -fuzz` is not invoked in any CI
    workflow inspected; no `FuzzXxx` functions detected at scan time.
-4. **No benchmark gates.** `llm-agent/bench/bench_test.go` exists
+5. **No benchmark gates.** `llm-agent/bench/bench_test.go` exists
    (the only `bench/` directory found) but no CI step runs
-   `go test -bench`. Performance regressions would land silently.
-5. **Conformance against real provider APIs is opt-in only.**
+   `go test -bench`. v0.1.1's "perf" tag on the engine-cache + event-
+   batching change has no benchmark in CI — the gains are asserted
+   in the CHANGELOG, not in a tracked benchmark.
+6. **Conformance against real provider APIs is opt-in only.**
    - `ollama_live` runs nightly (real container).
    - OpenAI / Anthropic / DeepSeek / MiniMax have *no* live-tag
      equivalent — only `httptest.NewServer`-based mock servers.
-     Real API drift (e.g. OpenAI changes its tool-call schema) would
-     not be caught until a downstream user reports it.
-6. **No mutation testing, no property-based testing.** Determinism
-   is achieved through ScriptedLLM, not through stochastic input
-   generation.
-7. **Postgres conformance is opt-in via env var.** PR CI does not
+     Real API drift would not be caught until a downstream user
+     reports it.
+7. **No mutation testing, no property-based testing.** Determinism
+   is achieved through ScriptedLLM, stub-evaluators, and `:memory:`
+   SQLite — not through stochastic input generation.
+8. **Postgres conformance is opt-in via env var.** PR CI does not
    spin a Postgres container; only developers with
    `LLM_AGENT_RAG_PG_URL` set will exercise
    `llm-agent-rag/postgres/`.
-8. **No end-to-end stack test in the umbrella.** The
+9. **No end-to-end stack test in the umbrella.** The
    `llm-agent-customer-support` repo has its own `compose` validate
    + Docker build, but no test brings up the full stack (Ollama +
    OTel collector + Grafana + the support service) and exercises a
    real request-response cycle.
+10. **Auth tests cover correctness, not security depth.** The 8 cases
+    in `flowd/server/auth_test.go` cover header parsing, bypass, 401
+    vs 403 mapping, and constant-time comparison. They do **not**
+    cover rate-limiting (no rate limiter exists), audit logging (no
+    audit log exists — `/runs/{id}/events` is the only persistent
+    log and only fires for runs, not for auth events), or
+    brute-force protection. See CONCERNS.md.
 
 ---
 
-*Testing analysis: 2026-05-20*
+*Testing analysis: 2026-05-21*
