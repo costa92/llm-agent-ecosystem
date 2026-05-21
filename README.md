@@ -34,22 +34,26 @@ llm-agent-ecosystem/
 | `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.2** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
-| `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
-| `llm-agent-flow` | serializable flow IR + DAG executor (walking skeleton) | **v0.0.7** | `main` | <https://github.com/costa92/llm-agent-flow> |
+| `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
+| `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.1** | `main` | <https://github.com/costa92/llm-agent-flow> |
 
 Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow`
 introduced 2026-05-21 (v0.0.1 walking skeleton → v0.0.2 per-layer
 parallelism + `cmd/flowd` HTTP → v0.0.3 tool manifest → v0.0.4 CEL
 conditional edges → v0.0.5 SQLite run history + CRUD → v0.0.6
 per-event persistence → v0.0.7 Runner-interface seam → `otelflow`
-wrapper in `llm-agent-otel` v0.2.2). v1.1 ecosystem alignment
+wrapper in `llm-agent-otel` v0.2.2 → v0.0.8 bearer-token auth →
+v0.0.9 replay endpoint → **v0.1.0 SemVer freeze + API snapshot
+gate** → v0.1.1 LRU engine cache + sync-run event batching →
+`flowrunner` in `llm-agent-customer-support` v0.2.3). v1.1
+ecosystem alignment
 milestone shipped; v1.2 Core Capability Deepening is the active
 milestone.
 
 ## Dependency direction
 
 ```
-llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers
+llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers + llm-agent-flow
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag + llm-agent-flow
 llm-agent-providers         ──depends on──▶  llm-agent
 llm-agent-flow              ──depends on──▶  llm-agent
