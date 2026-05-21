@@ -3,20 +3,21 @@
 #
 # Three assertions, fail-fast:
 #
-#   1. llm-agent/go.mod direct `require` block contains EXACTLY one entry,
-#      and that entry is the github.com/costa92/llm-agent-rag back-edge.
+#   1. llm-agent/go.mod direct `require` block contains ZERO entries.
+#      The core module has no third-party runtime deps — not even the
+#      ecosystem siblings. Any forward edge to llm-agent-rag (or anything
+#      else) is a regression of P0-2 (the "RAG facade 名实不副" decision)
+#      and exits non-zero.
 #
 #   2. The full transitive dep set of llm-agent/... (via `go list -deps`)
 #      contains ONLY:
 #        - stdlib packages (no dot in path, or vendor/ stdlib alias)
-#        - github.com/costa92/llm-agent and its subpackages
-#        - github.com/costa92/llm-agent-rag and its subpackages
-#        - golang.org/x/... (allowed as transitive of rag)
+#        - github.com/costa92/llm-agent and its subpackages (self)
 #      Anything else is a leak and exits non-zero.
 #
 #   3. The stdlib-clean sub-packages (policy/, budget/, agentstest/) must
-#      have ZERO external deps — not even llm-agent-rag (these sub-packages
-#      MUST remain importable without pulling the back-edge).
+#      have ZERO external deps — the rule mirrors Assertion 2 for these
+#      sub-packages individually so they cannot regress independently.
 #
 # Resolution:
 #   ECOSYSTEM_ROOT defaults to this script's parent directory's parent
@@ -80,13 +81,8 @@ echo "  direct require count: $DIRECT_COUNT"
 echo "  direct require lines:"
 printf '%s\n' "$DIRECT" | sed 's/^/    /'
 
-if [ "$DIRECT_COUNT" -ne 1 ]; then
-  echo "::error::expected exactly 1 direct require in core go.mod, got $DIRECT_COUNT"
-  fail=1
-fi
-
-if ! printf '%s\n' "$DIRECT" | grep -qE '^github\.com/costa92/llm-agent-rag[[:space:]]+v[0-9]+\.[0-9]+\.[0-9]+'; then
-  echo "::error::direct require is not the github.com/costa92/llm-agent-rag back-edge"
+if [ "$DIRECT_COUNT" -ne 0 ]; then
+  echo "::error::expected ZERO direct requires in core go.mod (P0-2: no RAG back-edge), got $DIRECT_COUNT"
   fail=1
 fi
 
@@ -114,11 +110,8 @@ LEAKS=$(printf '%s\n' "$DEPS_ALL" | awk '
     if (p ~ /^vendor\//) next
     # crypto/internal pseudo-versioned (e.g. crypto/internal/entropy/v1.0.0)
     if (p ~ /^crypto\/internal\//) next
-    # in-ecosystem core + back-edge
+    # in-ecosystem self only — no sibling allowance after P0-2
     if (p == "github.com/costa92/llm-agent" || p ~ /^github\.com\/costa92\/llm-agent\//) next
-    if (p == "github.com/costa92/llm-agent-rag" || p ~ /^github\.com\/costa92\/llm-agent-rag\//) next
-    # golang.org/x/... allowed as rag transitive
-    if (p ~ /^golang\.org\/x\//) next
     print p
   }
 ')

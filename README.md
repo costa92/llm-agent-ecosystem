@@ -53,24 +53,28 @@ milestone.
 ## Dependency direction
 
 ```
-llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers + llm-agent-flow
+llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers + llm-agent-flow + llm-agent-rag
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag + llm-agent-flow
 llm-agent-providers         ──depends on──▶  llm-agent
 llm-agent-flow              ──depends on──▶  llm-agent
-llm-agent                   ──depends on──▶  llm-agent-rag (RAG facade only)
+llm-agent                   ──depends on──▶  (nothing — stdlib only, zero third-party requires)
 llm-agent-rag               ──depends on──▶  (stdlib only at v1.0.0; `postgres` subpackage may pull pgx)
 ```
 
 `llm-agent-rag` is the **fixed point** every other repo aligns *to* — its
 v1.x public API is additive-only; breaking changes go to a `/v2` module path.
+Downstreams that need RAG import it directly; the core `llm-agent` no
+longer ships a facade re-export (P0-2 decision, 2026-05-21).
 
 ## Project rules
 
 These are enforced by CI gates across every repo. They are non-negotiable.
 
-1. **Core `llm-agent` stays stdlib-only.** No `go.sum` with non-stdlib deps;
-   no non-stdlib in `go.mod`. The only `go.sum` line allowed is the
-   `llm-agent-rag` back-edge for the RAG facade.
+1. **Core `llm-agent` stays stdlib-only.** Zero third-party deps:
+   `go.mod` carries no `require` block, `go.sum` is empty. The previous
+   `llm-agent-rag` back-edge exception was removed in P0-2 (2026-05-21)
+   because the facade was an empty directory in practice; the B4 gate
+   (`scripts/stdlib-only-check.sh`) now asserts zero direct requires.
 2. **No `replace` directives in tagged-release branches.** `replace` is a
    local-dev escape hatch only. The `INFRA-04` CI gate refuses to tag a
    commit whose `go.mod` carries a `replace`.
