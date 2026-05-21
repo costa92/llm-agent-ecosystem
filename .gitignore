@@ -7,3 +7,5 @@
 /llm-agent-customer-support/
 /llm-agent-flow/
 /go.work.sum
+/cmd/depcheck/depcheck
+/cmd/depcheck/depcheck.json

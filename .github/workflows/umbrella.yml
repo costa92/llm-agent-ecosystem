@@ -102,6 +102,24 @@ jobs:
           GOWORK=off go build ./...
           GOWORK=off go test ./... -count=1
 
+      - name: B3 — depcheck cascade tool (informational)
+        working-directory: cmd/depcheck
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go test ./... -count=1
+          # Emit cascade JSON as a build artifact for operators. Don't
+          # fail the umbrella on staleness — that's dep-currency-check.sh's
+          # job. Exit-1 from depcheck means stale; swallow it here.
+          GOWORK=off go run . --json | tee depcheck.json || true
+          GOWORK=off go run . || true
+
+      - name: Upload depcheck artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: depcheck-cascade
+          path: cmd/depcheck/depcheck.json
+          if-no-files-found: warn
+
   smoke:
     name: B2 — flowd binary smoke gate
     needs: cross-repo-build
