@@ -189,3 +189,26 @@ jobs:
         run: |
           echo "----- flowd.log -----"
           cat /tmp/flowd.log || true
+
+  stdlib-only-gate:
+    name: B4 — core llm-agent stdlib-only assertion
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout umbrella root
+        uses: actions/checkout@v4
+
+      - name: Checkout llm-agent
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent
+          ref: main
+          path: llm-agent
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+
+      - name: Run stdlib-only assertion gate
+        run: bash scripts/stdlib-only-check.sh
