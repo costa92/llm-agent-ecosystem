@@ -70,7 +70,7 @@
 | `llm-agent-flow` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
 | `llm-agent-providers` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
 | `llm-agent-otel` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
-| `llm-agent-customer-support` | `main` | 有 protection | `go`, `governance` | `true` | 基本对齐 |
+| `llm-agent-customer-support` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
 
 ### 3.3 workflow 文件矩阵
 
@@ -135,19 +135,23 @@
 
 所以它是“治理层已对齐”，但如果团队未来要把更完整的 CI 结果也升为必过项，还可以继续增强。
 
-另外，它当前是 6 个仓库里唯一一个：
+另外，`llm-agent-customer-support` 之前是 6 个仓库里唯一一个：
 
 - `allow_force_pushes = true`
 
-这不影响 `go + governance` 主治理链路，但从一致性角度看，后续可评估是否也收紧到 `false`。
+这一项现已收紧为：
+
+- `allow_force_pushes = false`
+
+所以当前 6 个仓库的默认分支 protection 细节也已经完全对齐。
 
 ### 4.4 `llm-agent-flow` 的额外缺口
 
-`llm-agent-flow` 当前除了 GitHub 仓库设置未对齐外，还有一个 workflow 级差异：
+`llm-agent-flow` 之前除了 GitHub 仓库设置未对齐外，还有一个 workflow 级差异：
 
 - 当前仓库里没有 `release-precheck.yml`
 
-这不是 GitHub 仓库 settings 的问题，而是 repo 内 workflow 文件还没补齐。
+这一项现已补齐，因此 `llm-agent-flow` 现在也拥有与其他仓库一致的 release gate。
 
 ## 5. 审计结论
 
@@ -164,22 +168,21 @@
 
 目前剩余的不是核心阻塞项，而是一致性增强项：
 
-1. 为 `llm-agent-flow` 补上 `release-precheck.yml`
-2. 评估是否将 `llm-agent-customer-support` 的 `format` / `compose` / `docker` 也纳入 required checks
-3. 评估是否将 `llm-agent-customer-support` 的 `allow_force_pushes` 从 `true` 收紧到 `false`
+1. 评估是否将 `llm-agent-customer-support` 的 `format` / `compose` / `docker` 也纳入 required checks
+2. 周期性复核 6 个仓库 settings 是否仍保持一致
 
 ### 5.3 次级待修复项
 
-1. 周期性复核 6 个仓库 settings 是否仍保持一致
-2. 若后续新增仓库，按同样矩阵补齐治理面
+1. 若后续新增仓库，按同样矩阵补齐治理面
+2. 若后续新增 release gate / nightly gate，及时同步文档矩阵
 
 ## 6. 推荐下一步
 
 建议按下面顺序收口：
 
 1. 重新跑一次 owner PR 验证，确认 `llm-agent`、`llm-agent-rag`、`llm-agent-flow` 现在也能稳定 auto-merge
-2. 为 `llm-agent-flow` 补上 `release-precheck.yml`
-3. 评估是否继续统一 `customer-support` 的 protection 细节
+2. 评估是否将 `llm-agent-customer-support` 的 `format` / `compose` / `docker` 升级为 required checks
+3. 周期性重跑本审计矩阵，防止线上配置回退
 
 ## 7. 一句话总结
 

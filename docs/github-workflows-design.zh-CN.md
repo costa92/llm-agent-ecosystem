@@ -407,7 +407,7 @@ external contributor opens PR
 
 1. `delete-merged-branch.yml` 仍然存在于全部仓库，但已降级为兜底，不应再被视为主删除路径。
 2. `umbrella.yml` 目前未纳入 `llm-agent-flow`。
-3. `release-precheck.yml` 当前没有推广到 `llm-agent-flow`。
+3. `llm-agent-customer-support` 当前在 protection 层仍只强制 `go + governance`，尚未把 `format` / `compose` / `docker` 升级为 required checks。
 4. `pr-governance.yml` 里的 merged 轮询窗口是有限的；如果 GitHub merged 可见性超出窗口，主删除路径会让位给 repo 设置或兜底 workflow。
 5. 目前没有统一 reusable workflow 层，跨仓修改时需要同步更新多份 YAML。
 

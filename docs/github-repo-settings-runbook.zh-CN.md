@@ -141,7 +141,7 @@ owner PR
 
 - default branch: `main`
 - required checks: `go`, `governance`
-- note: 当前未见 `release-precheck.yml`
+- `release-precheck.yml` 已补齐
 
 ### `llm-agent-providers`
 

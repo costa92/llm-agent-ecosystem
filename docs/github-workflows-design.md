@@ -382,7 +382,7 @@ Today the important property is behavioral consistency, not file deduplication.
 
 1. `delete-merged-branch.yml` is still present everywhere even though it is now fallback-only.
 2. `umbrella.yml` does not yet include `llm-agent-flow`.
-3. `release-precheck.yml` has not been rolled out to `llm-agent-flow`.
+3. `llm-agent-customer-support` still only requires `go + governance` at the branch-protection layer even though its CI also produces `format`, `compose`, and `docker`.
 4. the merged-state polling window in `pr-governance.yml` is finite
 5. there is no reusable workflow layer yet, so cross-repo workflow changes still require multi-repo edits
 
