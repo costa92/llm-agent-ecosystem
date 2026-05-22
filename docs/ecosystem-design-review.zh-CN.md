@@ -16,8 +16,8 @@
 但在"做到了多少"这个问题上要分档评：
 
 - **真做到、可商用骨架**：`llm-agent-rag` v1.x（fixed-point + api snapshot + 22-subtest store conformance）、`llm-agent-providers`（5 个 provider 共享 fixture + 3 层测试金字塔 + first-byte-retry 一致性）、`llm-agent-otel` 的 8-wrapper capability 矩阵。
-- **架构清晰但有真实 bug 待修**：`llm-agent` 核心、`llm-agent-flow`、`llm-agent-customer-support`。其中 `customer-support` 的 prompt-injection 防御在 production binary 里完全失效（§6 P0-1）。
-- **名实不副**：`llm-agent` 的 RAG facade 是空目录但 go.mod 仍要求依赖（§4.5）；providers 的 "stdlib-only HTTP" 承诺与 5 个 SDK 依赖的现实冲突（§2.2）；DeepSeek/MiniMax 的 capabilities 硬编码违反 K2 精神（§3.4）。
+- **架构清晰但有真实 bug 待修**：`llm-agent` 核心、`llm-agent-flow`、`llm-agent-customer-support`。原文中 P0-1（customer-support guardrails wiring）已在 v1.3 first wave 修复（PR #11 customer-support，commit 9171a0a），production binary 已正确装配 `guardrails.New(guardrails.Config{})`（状态截至 2026-05-22）。
+- **名实不副**：~~`llm-agent` 的 RAG facade 是空目录但 go.mod 仍要求依赖（§4.5）~~ → P0-2 **已采纳 drop-dependency 路径**（commit 6029565，go.mod 反向边删除 + `llm-agent/rag/` 空目录移除，状态截至 2026-05-22）；providers 的 "stdlib-only HTTP" 承诺与 5 个 SDK 依赖的现实冲突（§2.2）仍存在；~~DeepSeek/MiniMax 的 capabilities 硬编码违反 K2 精神（§3.4）~~ → P1-8 已修（PR #18 providers，commit 5f619dd + 4484ac0；详见 §2.2 / §3.4）。
 
 **判断建议**：
 - 想白盒 LLM agent 框架 → 用核心 `llm-agent`，可以 fork。
@@ -54,7 +54,6 @@ flowchart TB
         cs["llm-agent-customer-support v0.2.3<br/>(27 .go / 4.1K LOC)"]
     end
 
-    agent -.->|空 facade<br/>require but never imported| rag
     providers --> agent
     flow --> agent
     otel --> agent
@@ -67,7 +66,7 @@ flowchart TB
     cs --> rag
 ```
 
-> 边的"虚线"表示 `llm-agent/go.mod` 声明依赖但 `grep -rn 'llm-agent-rag' --include='*.go'` 找不到任何 import 语句（见 §4.5）。
+> 注（状态截至 2026-05-22）：原图含 `agent -.-> rag` 的"空 facade"虚线（require but never imported）。P0-2 已合（commit 6029565），该反向边从 `llm-agent/go.mod` 删除、`llm-agent/rag/` 空目录移除；当前生态依赖图为严格 DAG（详见 §4.5）。
 
 ### 1.2 总评
 
@@ -77,7 +76,7 @@ flowchart TB
 | **依赖卫生** | 高（核心）/ 中（providers） | core `go.sum` 只 2 行；providers 5 个 SDK 共用 3 套上游（openai-go 服务 openai+deepseek，anthropic-sdk-go 服务 anthropic+minimax） |
 | **可测试性** | 高 | `ScriptedLLM` 是 4 capability 一等公民、`storetest` 22 subtest、provider fixture 三层金字塔、apisnapshot CI gate |
 | **生产度** | 中 | rag 缺生产向量索引；providers 5 个都缺默认 timeout；customer-support 是显式标注的 demo only |
-| **名实一致** | 中 | rag facade 名实不副；providers"stdlib-only HTTP"措辞误导；customer-support README ≠ wiring；otelmodel timeToFirst histogram 已建但 wrapper 没接 |
+| **名实一致** | 高（状态截至 2026-05-22） | 原"rag facade 名实不副"已通过 P0-2 drop-dependency 消除；原"customer-support README ≠ wiring"已通过 P0-1 guardrails 装配修复；仅剩 providers"stdlib-only HTTP"措辞误导 + otelmodel timeToFirst histogram 已建但 wrapper 没接（P1-12 未合）|
 | **演进策略** | 高 | rag v1 frozen + /v2 路径明示；flow apisnapshot + 加法兼容；core 4 个 validated 类型禁改 |
 
 ---
@@ -92,14 +91,14 @@ flowchart TB
 
 | 仓库 | 落地度 | 证据 |
 |---|---|---|
-| `llm-agent` | **YELLOW**（口号 vs 现实） | `llm-agent/go.mod:5` 声明 `require github.com/costa92/llm-agent-rag v1.0.1`，但 `llm-agent/rag/` 是空目录（`docs/source-design-llm-agent.zh-CN.md:376-379`），**没有任何 `.go` 文件 import 它** —— 这条豁免目前没在用 |
+| `llm-agent` | GREEN | P0-2 已采纳 drop-dependency 路径（commit 6029565，状态截至 2026-05-22）：`llm-agent/go.mod` 已删 `llm-agent-rag` 反向边、`llm-agent/rag/` 空目录已移除。核心仓现为严格 stdlib-only（详见 §4.5）|
 | `llm-agent-rag` | GREEN（核心子包）+ 受控 island | `llm-agent-rag/go.mod` 列出 `pgx/v5` + `pgvector-go` 但只在 `postgres/` 子包用；`adapter/llmagent/` 用 `//go:build llmagent` 隔离 |
 | `llm-agent-providers` | **YELLOW**（措辞误导） | umbrella README 与 `docs/source-design-llm-agent-providers.zh-CN.md:150-160` 都提到"stdlib-only HTTP"，但 `go.mod` 实际依赖 `openai-go/v3`、`anthropic-sdk-go`、`ollama/api` 三套 SDK |
 | `llm-agent-otel` | GREEN | OTel SDK 是允许依赖，符合定位 |
 | `llm-agent-flow` | GREEN（核心包）+ 子包受控 | `flow/` 仅依赖 `llm-agent` 的 `agents.Tool` + `pkg/fanout`；CEL、SQLite、OTel 各自独立子包，由 umbrella B4 gate 守 |
 | `llm-agent-customer-support` | GREEN | sibling SDK 集合体，本身不参与"核心 stdlib-only" |
 
-**结论**：这条信条的**精神**贯彻得很彻底（每个仓都自觉守边界），但**字面**已经在多处松动。core 仓的 phantom RAG 依赖与 providers 的 SDK 重度依赖是两处最大的不一致。**建议**：要么落地 facade、要么删除依赖；providers 的"stdlib-only HTTP"措辞应修订为"thin SDK wrapper, public surface uses net/http types"。
+**结论**（状态截至 2026-05-22）：这条信条**字面与精神已统一**。原 "core 仓 phantom RAG 依赖" 已通过 P0-2 drop-dependency 路径消除（commit 6029565）。当前唯一字面松动点是 providers 的"stdlib-only HTTP"措辞误导（5 个 SDK 依赖的现实），**建议**：providers 的"stdlib-only HTTP"措辞应修订为"thin SDK wrapper, public surface uses net/http types"。
 
 ### 2.2 信条 2：Capability per `(provider × model)`（K2）
 
@@ -110,10 +109,10 @@ flowchart TB
 | openai | GREEN | `openai/options.go:67-83` 按 `cfg.model` 字符串切 `embeddings` |
 | anthropic | GREEN（"整家无 embedding"是静态事实） | `anthropic/options.go:71-80` |
 | ollama | GREEN | `ollama/options.go:74-109` + `tool_strategy.go:20-48` 的 `family/parserKind/supportsTool` 三元组按 model 切 |
-| deepseek | **YELLOW** | `deepseek/options.go:93-98` 硬编码 `{Tools:true, Embeddings:false}` 不看 model（`docs/source-design-llm-agent-providers.zh-CN.md:587`） |
-| minimax | **YELLOW** | 同上，`minimax/options.go:93-98` |
+| deepseek | GREEN | `deepseek/options.go:93` `Capabilities: capabilitiesForModel(cfg.model)` + `deepseek/capabilities.go`（P1-8 已修，PR #18 providers commit 5f619dd，状态截至 2026-05-22）|
+| minimax | GREEN | `minimax/options.go:93` 同形 + `minimax/capabilities.go`（P1-8 已修，commit 4484ac0，状态截至 2026-05-22）|
 
-**结论**：K2 在 5 个 provider 里有 3 个真正按 model 反映能力，2 个伪 K2（硬编码）。**建议**：每个 provider 加 `capabilitiesForModel(model string)` 辅助（即便所有 case 字面量相同也要写明），强制未来加新 reasoning-only model 时显式过一遍。
+**结论**：K2 在 5 个 provider 里**全部按 model 反映能力**（状态截至 2026-05-22 — P1-8 已合）。原"3 个真正 / 2 个伪 K2（硬编码）"判断已不再适用。**保留建议留作 K2 演进档案**：每个 provider 加 `capabilitiesForModel(model string)` 辅助（即便所有 case 字面量相同也要写明），强制未来加新 reasoning-only model 时显式过一遍 —— 此条建议已被 P1-8 PR 完成。
 
 ### 2.3 信条 3：OTel as decorator, never as hook（K3）
 
@@ -139,7 +138,7 @@ flowchart TB
 | openai | `openai/openai.go:108-231` 的 `chunkEvents` | GREEN |
 | anthropic | `anthropic/anthropic.go:122-197` 内嵌 `blockKinds map`，自然带 content_block index | GREEN |
 | ollama | `ollama/ollama.go:197-313` 的 ingest 状态机 | **YELLOW** — 流路径下 tool 信息只在 done 帧到达，buffer-then-parse 没做流式增量；`docs/source-design-llm-agent-providers.zh-CN.md:436-438` |
-| deepseek/minimax | 与 openai/anthropic 几乎镜像 | GREEN（代码层），YELLOW（测试覆盖：cancel + partial-usage conformance 没跑） |
+| deepseek/minimax | 与 openai/anthropic 几乎镜像 | GREEN（代码层 + 测试覆盖：cancel + partial-usage conformance 已在 P1-7 中纳入矩阵，PR #17 providers，状态截至 2026-05-22）|
 | flow | `flow/event.go:14-34` 的 `FlowEvent{Kind, ...}` 与 K1 同形 | GREEN |
 | otelmodel.streamReader | first-token event + EventDone | GREEN（trace 端），**但 metric 端没接** —— `docs/source-design-llm-agent-otel.zh-CN.md:706-707`：`timeToFirst` histogram 已 build 但 wrapper 没调用 |
 
@@ -168,18 +167,18 @@ flowchart TB
 | Keystone | 决策内容 | 执行评分 | 主要证据（file:line） |
 |---|---|---|---|
 | **K1** | StreamEvent typed union + per-tool-call Index 稳定 | YELLOW | 接口 GREEN（`llm/stream.go:21-70`），但 `AccumulateStream` 实际按 `ID` 键合（`llm/stream.go:130-145`，注释明示 "NOT the production accumulator"）；ollama 流路径不发流式 tool event |
-| **K2** | Capabilities per (provider × model) | YELLOW | 3/5 provider GREEN；deepseek/minimax 硬编码（`deepseek/options.go:93-98`） |
+| **K2** | Capabilities per (provider × model) | GREEN | 5/5 provider GREEN：deepseek/minimax 已加 `capabilitiesForModel` 辅助（`deepseek/capabilities.go` + `minimax/capabilities.go`，P1-8 已合 PR #18 providers，状态截至 2026-05-22）|
 | **K3** | OTel as decorator wrapper, never hooks | GREEN | core 0 行 OTel；8-wrapper 矩阵（`otelmodel/otelmodel.go:14-49`）；rag Observer 二级备选（`otelrag/otelrag.go:184-232`） |
-| **K4** | 三态 cost（reported/estimated/unknown）+ retry 状态机 | YELLOW | 三态在 `llm/types.go:78-82` 已定义；retry 状态机**留给 provider 实现**：openai 有 first-byte-retry，但 anthropic/ollama/minimax 都没解析 `Retry-After`（`anthropic/errors.go:31-33`、`ollama/errors.go:38-46`、`minimax/errors.go:28-31`） |
+| **K4** | 三态 cost（reported/estimated/unknown）+ retry 状态机 | GREEN | 三态在 `llm/types.go:78-82` 已定义；retry 状态机**留给 provider 实现**：5/5 provider 已解析 `Retry-After`（openai `errors.go:33-38` / anthropic / deepseek / minimax / ollama 全部已 lift；P1-9 已合，PR #19 + PR #20 providers，状态截至 2026-05-22）|
 | **K5** | gen_ai semconv 集中常量 + env opt-in | GREEN | `llm-agent-otel/semconv_gen_ai.go:9-30` 唯一真理源；`OTEL_SEMCONV_STABILITY_OPT_IN` + `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` 双闸门（`semconv_gen_ai.go:37-44`） |
 | **K6** | multi-repo CI 门禁 | GREEN | umbrella B2 smoke / B3 depcheck / B4 stdlib-only gate 已陆续上线（`git log` 显示 commits bc970bc / 8c4cd8c / d396d5b） |
-| **K7** | customer-support 硬 cap + DISABLE_LLM panic switch | YELLOW | DISABLE_LLM 已生效（`limits.go:123-126`），但 guardrails wiring 未启用（**P0 bug**，§6） |
+| **K7** | customer-support 硬 cap + DISABLE_LLM panic switch | GREEN | DISABLE_LLM 已生效（`limits.go:123-126`）；guardrails wiring 已修复（`internal/app/app.go:113` `Guardrails: guardrails.New(guardrails.Config{})`，P0-1 已合 PR #11 customer-support commit 9171a0a，状态截至 2026-05-22）|
 | KC-1 | Supervisor 建立在 StateGraph[S] 之上 | GREEN | `orchestrate/supervisor.go:48-454` 3-node graph facade + `var _ agents.Agent = (*Supervisor)(nil)` 编译期断言可嵌套 |
 | KC-2 | memory tiering | 延期到 v1.3 | 文档说明 |
 | CC-1 | Budget chokepoint at generateFromPrompt | GREEN | `agent_chatmodel.go:11-54` 覆盖所有 5 个 agent 范式 |
 | CC-2 | Policy middleware (8-wrapper tree) | GREEN | `policy/policy.go:43-67` |
 
-**总评分**：12 个 keystone / 主要决策中 8 GREEN、4 YELLOW、0 RED。**YELLOW 的共同模式都是"接口定义齐了，工具完备性留给后续"**。
+**总评分**（状态截至 2026-05-22）：12 个 keystone / 主要决策中 11 GREEN、1 YELLOW、0 RED。**唯一 YELLOW（K1）的根因是 `AccumulateStream` 仍是 ID-keyed 占位 + ollama 流路径不发流式 tool event**。原评审时的 4 YELLOW 中，K2/K4/K7 已分别通过 P1-8、P1-9、P0-1 三轮 PR 完成 lift。
 
 ---
 
@@ -235,28 +234,26 @@ flowchart TB
 
 **判断**：`agents.Tool` 是真共契约；`flow.Tool` 是它的**子集**（去掉 Description/Schema），通过单向 adapter 桥接。这是合理的不对称 —— flow 节点不需要 LLM tool calling schema。**评分：GREEN**。
 
-### 4.5 RAG Facade（critical incoherence）
+### 4.5 RAG Facade（已采纳 drop-dependency 路径，状态截至 2026-05-22）
 
-**契约**：umbrella README 与 `llm-agent/CLAUDE.md` 都把 `llm-agent.rag/` 当作 "RAG facade"，是核心 stdlib-only 规则的**唯一豁免点**。
+**原契约**：umbrella README 与 `llm-agent/CLAUDE.md` 把 `llm-agent.rag/` 当作 "RAG facade"，作为核心 stdlib-only 规则的"唯一豁免点"。
 
-**现实**：
+**评审时（2026-05-21）的不一致**：核心仓声明了一条"唯一允许的反向边"但**完全没用它**——`llm-agent/rag/` 是空目录，`go.mod` 仍 require `llm-agent-rag v1.0.1`，下游 customer-support 直接 import rag 子包绕过 facade，B4 stdlib-only assertion gate 需要硬编码白名单。
+
+**现状（P0-2 已合，commit 6029565）**：选 **drop-dependency 路径**（路线图 §2 选项 B）：
+- `llm-agent/go.mod` 删除 `require github.com/costa92/llm-agent-rag` 反向边；
+- `llm-agent/rag/` 空目录移除；
+- 下游 customer-support 继续直接 import `llm-agent-rag/rag` 子包（不经过 facade，与现有行为一致）；
+- B4 stdlib-only gate 不再需要 rag 豁免白名单（`grep -rn llm-agent-rag llm-agent/` 现在只在 doc 注释里出现）。
 
 ```bash
+$ cat llm-agent/go.mod | grep llm-agent-rag
+# (no output)
 $ ls llm-agent/rag/
-# 空
-$ grep -rn 'llm-agent-rag' llm-agent/ --include='*.go'
-# 只有 agentstest/doc.go 注释里的字符串
-$ cat llm-agent/go.sum
-github.com/costa92/llm-agent-rag v1.0.1 h1:+pR+TJ8betcKnw1IfTooJMA9eRJyUyr4S/OdnMbwpOM=
-github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5CqwFNc+J6vLrejE=
+# ls: 无法访问 'llm-agent/rag/': 没有那个文件或目录
 ```
 
-**判断**：核心仓声明了一条"唯一允许的反向边"但**完全没用它**。这等于：
-- stdlib-only 规则的字面意义被破坏（即便 facade 计划上是合理的）；
-- 下游 `customer-support` 真正用 RAG 时是直接 `import "github.com/costa92/llm-agent-rag/rag"`（`knowledgebase/knowledgebase.go:46`），并未经过 facade；
-- B4 stdlib-only assertion gate（umbrella commit bc970bc）需要硬编码一条"允许 llm-agent-rag"豁免，否则一启动就 false-positive 失败。
-
-**评分：RED**（语义不一致）。**建议**：见路线图 P0-2，二选一（落地 facade 或删依赖）。
+**评分：GREEN（语义一致化）**。当未来 K3-K5 路径上需要 rag 接口时（例如 OTel decorator 双形态进核心），可再以正向边 import 或在 v2 引入薄 facade。当前选择反映"语义一致优先于物理对齐"的取舍。
 
 ### 4.6 Trace 模型（gen_ai semconv）
 
@@ -276,14 +273,14 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 
 | 仓 | 反向依赖（pull other ecosystem repos） | 备注 |
 |---|---|---|
-| `llm-agent` | `llm-agent-rag v1.0.1`（phantom） | 见 §4.5 |
+| `llm-agent` | （无） | P0-2 drop-dependency 后核心已无反向边（commit 6029565，状态截至 2026-05-22；原 phantom `llm-agent-rag v1.0.1` 已移除）|
 | `llm-agent-rag` | （无） | 真正的 fixed point |
 | `llm-agent-otel` | `llm-agent` + `llm-agent-rag` + `llm-agent-flow` | 装饰器层正向 |
 | `llm-agent-providers` | `llm-agent v0.5.1` | 正向 |
 | `llm-agent-flow` | `llm-agent v0.5.x` | 正向（仅 `agents.Tool` + `pkg/fanout`） |
 | `llm-agent-customer-support` | 全部 5 个 sibling | 正向 |
 
-**判断**：依赖图**严格 DAG**（除 phantom 边）。fix point + 正向消费链非常干净。
+**判断**（状态截至 2026-05-22）：依赖图为**严格 DAG**。fix point + 正向消费链非常干净。
 
 ### 5.2 CI 闸子现状
 
@@ -320,8 +317,8 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 
 | 编号 | 仓 | 描述 | 证据（file:line） |
 |---|---|---|---|
-| **P0-1** | customer-support | **Guardrails wiring bug** — `app.go:106-110` 调用 `supportflow.New` 时不传 `Guardrails`；production binary 上 prompt-injection 过滤与"untrusted-RAG"system prompt 前缀**全部失效**。但 README 第 7 行声称这是 day-one defense。`grep -rn "Guardrails" internal/app/` 返回 0 行。单元测试覆盖了 guardrails 路径（`supportflow_test.go:141-208`），但 production 装配从未触发它。 | `internal/app/app.go:106-110` |
-| **P0-2** | llm-agent + umbrella | **RAG facade 名实不副** — `llm-agent/rag/` 空目录但 `go.mod` require `llm-agent-rag v1.0.1`；任何 stdlib-only assertion gate 必须为这条"唯一豁免"加硬编码白名单，否则 false-positive。 | `llm-agent/rag/`（空）+ `llm-agent/go.mod:5` |
+| **P0-1**（已修） | customer-support | ~~Guardrails wiring bug~~ — 已修复：`internal/app/app.go:113` 现在传入 `Guardrails: guardrails.New(guardrails.Config{})`（PR #11 customer-support commit 9171a0a，状态截至 2026-05-22）。原 bug：调用 `supportflow.New` 不传 Guardrails 导致 prompt-injection 过滤与"untrusted-RAG"前缀失效。 | `internal/app/app.go:113`（已 wire）|
+| **P0-2**（已修） | llm-agent + umbrella | ~~RAG facade 名实不副~~ — 已采纳 drop-dependency 路径（commit 6029565，状态截至 2026-05-22）：`llm-agent/go.mod` 删除反向边、`llm-agent/rag/` 空目录移除；B4 stdlib-only assertion gate 不再需要 rag 白名单。详见 §4.5 现状叙述。 | `llm-agent/go.mod`（无 rag）+ `llm-agent/rag/` 不存在 |
 
 ### 6.2 P1（下个版本窗口）
 
@@ -329,13 +326,13 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 |---|---|---|---|
 | **P1-1** | llm-agent-rag | **生产 Postgres 缺向量索引** — `postgres.Migrate` 不创建 ivfflat / hnsw 索引，生产部署遇到 ~100K chunk 就崩 | `postgres/postgres.go:93-161` |
 | **P1-2** | llm-agent-rag | **InjectionScanner 覆盖不全** — 只在 `Ask` 路径跑 sanitize；`AskGlobal` / `AskDrift` 完全不跑，攻击者注入 community report 描述可绕过 | `rag/inject.go:21-48` + `rag/global.go` / `rag/drift.go` 无 sanitize 调用 |
-| **P1-3** | llm-agent | **`comm/a2a` 后台 goroutine ctx 泄露** — `server.go:128-129` 用 `context.Background()` 起 worker，HTTP 请求返回后无法 cancel；自带 FIXME | `comm/a2a/server.go:128-129` |
-| **P1-4** | llm-agent | **`runStreamFromBlocking` ctx-cancel 不发 Done event** — `agent.go:107-122` ctx 取消时 channel 关闭，consumer 通过 `range ch` 看不到 ctx err，无法区分"完成"与"取消" | `llm-agent/agent.go:107-122` |
+| **P1-3**（已修） | llm-agent | ~~comm/a2a 后台 goroutine ctx 泄露~~ — 已修复（PR #3 llm-agent commit 860dd20，状态截至 2026-05-22）：`comm/a2a/server.go:111` 起 worker 用 `ctx, cancel := context.WithCancel(...)`；新增 `task.go:112` `cancelAndFail` + DELETE /tasks/{id} 端点。 | `comm/a2a/server.go:111`、`comm/a2a/task.go:112` |
+| **P1-4**（已修） | llm-agent | ~~runStreamFromBlocking ctx-cancel 不发 Done event~~ — 已修复（PR #2 llm-agent commit 8ffed58，merge 44f547d，状态截至 2026-05-22）：`agent.go:126-128` 在 ctx 取消路径上 best-effort 推 `StepEvent{Done: true, Err: ctx.Err()}`。 | `llm-agent/agent.go:126-128` |
 | **P1-5** | llm-agent | **`context` 包名冲突 stdlib `context`** — 强制下游 `aictx` 别名，新手易错 | `llm-agent/context/builder.go:4-9` |
 | **P1-6** | llm-agent-providers | **5 个 provider 缺默认 timeout** — 永挂连接会让 `Generate` 永久 block | `*/options.go` New 函数末尾 |
-| **P1-7** | llm-agent-providers | **DeepSeek/MiniMax 缺 cancel + partial-usage conformance** — `TestStream_CancelMidStream_Conformance` / `TestStream_PartialUsageOnError_Conformance` 只对 openai/anthropic/ollama 跑 | `internal/contract/generate_test.go:281-375` |
-| **P1-8** | llm-agent-providers | **DeepSeek/MiniMax capabilities 硬编码违反 K2** | `deepseek/options.go:93-98` + `minimax/options.go:93-98` |
-| **P1-9** | llm-agent-providers | **anthropic/ollama/minimax 不解析 `Retry-After`** —  K4 retry 信号不完整 | `anthropic/errors.go:31-33`、`ollama/errors.go:38-46`、`minimax/errors.go:28-31` |
+| **P1-7**（已修） | llm-agent-providers | ~~DeepSeek/MiniMax 缺 cancel + partial-usage conformance~~ — 已合并（PR #17 providers，状态截至 2026-05-22）：deepseek/minimax 已纳入 conformance fixture 矩阵。 | `internal/contract/generate_test.go`（含 deepseek/minimax）|
+| **P1-8**（已修） | llm-agent-providers | ~~DeepSeek/MiniMax capabilities 硬编码违反 K2~~ — 已合并（PR #18 providers commit 5f619dd + 4484ac0，状态截至 2026-05-22）：`deepseek/capabilities.go` + `minimax/capabilities.go` 已落地 `capabilitiesForModel`。 | `deepseek/options.go:93`（now `capabilitiesForModel(cfg.model)`）|
+| **P1-9**（已修） | llm-agent-providers | ~~anthropic/ollama/minimax 不解析 Retry-After~~ — 已合并 5/5（PR #19 anthropic+minimax + PR #20 ollama，状态截至 2026-05-22）：openai/anthropic/deepseek/minimax/ollama 全部已 lift Retry-After 至 `RateLimitError.RetryAfter`。 | 5 个 `errors.go` 均含 `Retry-After` 解析 |
 | **P1-10** | llm-agent-otel | **`NewTracerProvider` 不暴露 sampler** — 生产爆量风险（默认 `ParentBased(AlwaysOn)`） | `exporters.go:35` |
 | **P1-11** | llm-agent-otel | **不接管标准 OTLP env** — `OTEL_EXPORTER_OTLP_ENDPOINT` 等被忽略，写死 default | `exporters.go:22-28` |
 | **P1-12** | llm-agent-otel | **`timeToFirst` histogram 已 build 但 wrapper 没接** — `otelmodel.streamReader` 写了 `gen_ai.first_token` span event，但 metric 端 instrument 没被 record | `otelmodel/otelmodel.go:76-147` + `otelmetrics/otelmetrics.go:19-26` |
@@ -343,12 +340,12 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 | **P1-14** | llm-agent-otel | **`otelmodel` 与 `otelmetrics.Recorder` 解耦** — wrapper 不自动调 Recorder，token/duration metric 无人发；调用方需手动 | `otelmodel/otelmodel.go` 全文 + `otelmetrics/otelmetrics.go` |
 | **P1-15** | llm-agent-rag | **`HybridRetriever` 四路顺序** — Dense → Lexical → Structure → Graph 串行，可并发 3-4x | `retrieve.go:984-1009` |
 | **P1-16** | llm-agent-rag | **Embedding 单条串行** — `rag/import.go:76` 真模型吞吐主瓶颈，缺 `BatchEmbedder` optional capability | `rag/import.go:76` |
-| **P1-17** | llm-agent-flow | **SQLite 单事件写 ~5ms** — WAL 关闭 + 单语句 INSERT；`run_events` 写放大严重 | `flow/store/sqlite/open.go:51-92` + `events.go:20-54` |
-| **P1-18** | llm-agent-flow | **`FlowEvent.Metadata` 缺字段** — Tool 副作用（HTTP status / exec exit code / token 数）无法进事件流 | `flow/event.go` |
+| **P1-17**（已修） | llm-agent-flow | ~~SQLite 单事件写 ~5ms~~ — 已合并（PR #2 flow v0.1.2，状态截至 2026-05-22）：`store/sqlite/open.go` 已开 WAL + NORMAL fsync。 | `flow/store/sqlite/open.go`（WAL 已启用）|
+| **P1-18**（已修） | llm-agent-flow | ~~FlowEvent.Metadata 缺字段~~ — 已合并（PR #3 flow v0.1.3 commit 77e5be1，状态截至 2026-05-22）：`flow/event.go` 增加 `Metadata map[string]string`；新增 `MetadataAware` optional capability；flowd SSE payload 同步 propagate。 | `flow/event.go`（含 Metadata）|
 | **P1-19** | customer-support | **toolAgent 单趟无 ReAct 第二轮** — 工具结果直接当 final answer，缺客服话术润色 | `toolagent.go:57-133` |
 | **P1-20** | customer-support | **session 历史无截断** — 长会话单 prompt 超 `MaxTokensPerRequest` | `supportflow.go:209-226` |
 | **P1-21** | customer-support | **flowrunner 是孤岛** — 测试完备但 production 无任何 handler 调用 | `internal/flowrunner/*` + `cmd/server/main.go` 无引用 |
-| **P1-22** | customer-support | **readiness 永远 200** — `/readyz` 不 ping db/model | `internal/app/app.go:130` ReadyFunc 直接 return nil |
+| **P1-22**（已修） | customer-support | ~~readiness 永远 200~~ — 已合并（PR #16 customer-support commit fd78a40，状态截至 2026-05-22）：`internal/app/app.go:134` 注入 `makeReadyFunc(sessions, embedder, cfg.ReadinessProbeEmbedder)`，做 db PingContext + 1s embedder probe 双探测。 | `internal/app/app.go:134,234-256` |
 | **P1-23** | llm-agent-providers | **openai↔deepseek + anthropic↔minimax 代码重复 ~90%** — 缺 `internal/openaicompat` / `anthropiccompat` 抽象，stream reader 改一边手工同步另一边 | 5 个 `*/openai.go`、`*/deepseek.go`、`*/anthropic.go`、`*/minimax.go` 镜像 |
 
 ### 6.3 P2（长期）
@@ -393,22 +390,25 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 
 ### 8.1 立即修复（v1.2 收尾窗口）
 
-1. **修 customer-support guardrails wiring**（P0-1）— 一行代码 + 一个集成测试。
-2. **落地 RAG facade 或删依赖二选一**（P0-2）— 给"唯一豁免"一个明确归宿。
+1. ~~修 customer-support guardrails wiring（P0-1）~~ — **已完成**（PR #11 customer-support commit 9171a0a，状态截至 2026-05-22）。
+2. ~~落地 RAG facade 或删依赖二选一（P0-2）~~ — **已完成**：采纳 drop-dependency 路径（commit 6029565，状态截至 2026-05-22）。
 
 ### 8.2 v1.2 → v1.3 中期重构
 
 3. **providers 抽 internal/openaicompat / anthropiccompat**（P1-23）— 防 90% 重复 drift。
 4. **providers 5 个加 default timeout**（P1-6）— 单文件改动，影响巨大。
-5. **providers deepseek/minimax 补 K2 capabilitiesForModel + conformance fixture**（P1-7/8）。
+5. ~~providers deepseek/minimax 补 K2 capabilitiesForModel + conformance fixture（P1-7/8）~~ — **已完成**（PR #17 + PR #18 providers，状态截至 2026-05-22）。
 6. **rag HybridRetriever 并发化 + BatchEmbedder optional**（P1-15/16）— 3-10x 吞吐。
 7. **rag Postgres Migrate 加 vector index 选项**（P1-1）。
 8. **rag AskGlobal/AskDrift 补 injection sanitize**（P1-2）。
-9. **flow SQLite WAL + multi-VALUES INSERT**（P1-17）— 5-10x 写性能。
+9. ~~flow SQLite WAL + multi-VALUES INSERT（P1-17）~~ — **已完成 WAL 部分**（PR #2 flow v0.1.2，状态截至 2026-05-22）；multi-VALUES INSERT 仍待做。
 10. **otel NewTracerProvider 暴露 sampler + 接管标准 env**（P1-10/11）。
 11. **otelmodel 接 timeToFirst histogram + Recorder 自动连接**（P1-12/14）。
 12. **llm-agent context 包改名（v1 前 breaking 窗口）**（P1-5）。
-13. **llm-agent comm/a2a 后台 goroutine ctx 修复 + RunStream Done on cancel**（P1-3/4）。
+13. ~~llm-agent comm/a2a 后台 goroutine ctx 修复 + RunStream Done on cancel（P1-3/4）~~ — **已完成**（PR #2 + PR #3 llm-agent，状态截至 2026-05-22）。
+14. ~~providers anthropic/ollama/minimax 补 Retry-After 解析（P1-9）~~ — **已完成 5/5**（PR #19 + PR #20 providers，状态截至 2026-05-22）。
+15. ~~flow FlowEvent.Metadata 字段加（P1-18）~~ — **已完成**（PR #3 flow v0.1.3 commit 77e5be1，状态截至 2026-05-22）。
+16. ~~customer-support /readyz 真探测（P1-22）~~ — **已完成**（PR #16 customer-support，状态截至 2026-05-22）。
 
 ### 8.3 v1.3+ 长期演进
 
@@ -455,12 +455,12 @@ github.com/costa92/llm-agent-rag v1.0.1/go.mod h1:lAJAZgSU/87p0cVD16cgN7qga/Z5Cq
 | 编号 | 决策 | 仓 | 评分 |
 |---|---|---|---|
 | K1 | StreamEvent typed union + Index | core | YELLOW |
-| K2 | Capabilities per (provider × model) | providers / core | YELLOW |
+| K2 | Capabilities per (provider × model) | providers / core | GREEN（P1-8 已合，状态截至 2026-05-22）|
 | K3 | OTel as decorator wrapper | otel / 全生态 | GREEN |
-| K4 | 三态 cost + retry 状态机 | providers / core | YELLOW |
+| K4 | 三态 cost + retry 状态机 | providers / core | GREEN（P1-9 已合 5/5，状态截至 2026-05-22）|
 | K5 | gen_ai semconv + env opt-in | otel | GREEN |
 | K6 | multi-repo CI gate | umbrella | GREEN |
-| K7 | customer-support 硬 cap + DISABLE_LLM | customer-support | YELLOW（guardrails wiring） |
+| K7 | customer-support 硬 cap + DISABLE_LLM | customer-support | GREEN（P0-1 guardrails wiring 已合，状态截至 2026-05-22）|
 | KC-1 | Supervisor on StateGraph[S] | core | GREEN |
 | CC-1 | Budget chokepoint | core | GREEN |
 | CC-2 | Policy 8-wrapper middleware | core | GREEN |

@@ -70,8 +70,8 @@ K1/K2 在源码中的合规分数（参考 `llm-agent-providers/.planning/codeba
 | openai | GREEN | GREEN | 参考实现 |
 | anthropic | GREEN | GREEN | content-block index 直通 |
 | ollama | YELLOW | GREEN | **流不发 tool-call 事件**（见 §5） |
-| deepseek | YELLOW | YELLOW | 代码对但脱离主 conformance；caps 硬编码 |
-| minimax | YELLOW | YELLOW | 同 deepseek |
+| deepseek | GREEN | GREEN | 状态截至 2026-05-22：P1-7 conformance 已合（PR #17）+ P1-8 capabilitiesForModel 已合（PR #18 commit 5f619dd）|
+| minimax | GREEN | GREEN | 同 deepseek（commit 4484ac0）|
 
 ---
 
@@ -84,7 +84,7 @@ K1/K2 在源码中的合规分数（参考 `llm-agent-providers/.planning/codeba
 - `openai/options.go:67-83`：`embeddings := false; switch cfg.model { case "text-embedding-3-small", ...: embeddings = true }`
 - `ollama/options.go:74-109`：`strategy := strategyForModel(cfg.model); embedDim := embeddingDimensionForModel(cfg.model)`，把 `Tools` 与 `Embeddings` 都做成 model-dependent
 - `anthropic/options.go:71-80`：`Tools=true, Embeddings=false` 静态（Anthropic 整家都没 embeddings）
-- `deepseek/options.go:93-98` / `minimax/options.go:93-98`：**硬编码** `{Tools:true, Embeddings:false, ...}`，与 cfg.model 无关 → K2 在精神上有 YELLOW（见 §7 优化建议）
+- `deepseek/options.go:93` / `minimax/options.go:93`：~~硬编码 `{Tools:true, Embeddings:false, ...}`，与 cfg.model 无关~~ → **已修，状态截至 2026-05-22**：P1-8 已合（PR #18 commit 5f619dd + 4484ac0），现 `Capabilities: capabilitiesForModel(cfg.model)`，由 `deepseek/capabilities.go` / `minimax/capabilities.go` 显式 switch model name 决定。K2 精神已对齐。
 
 整个数据流后续读 model 都走 `o.info.Model`（`openai/map.go:29`、`anthropic/map.go:30`、`ollama/map.go:24`、`deepseek/map.go:29`、`minimax/map.go:30`），因此 model 自构造起即不可变；`llm.Request` 也不携带 model 字段，从协议层堵死 per-request override 的 anti-pattern。
 
@@ -877,7 +877,7 @@ CONCERNS.md `:96-102`：四个 SSE-based reader 都用 `queue []llm.StreamEvent`
 
 当前明确把 retry 的责任推给上游 caller（5 个 provider 都 `option.WithMaxRetries(0)`，参考 `openai/options.go:50` 等）。这是符合 SOLID 的设计选择，但意味着调用方必须自己实现 backoff（典型在 `llm-agent` 核心层）。
 
-**建议**：在每个 typed error 上加结构化字段（已部分支持，比如 `RateLimitError.RetryAfter`），但 Anthropic / Ollama / MiniMax 目前都没解析 `Retry-After`（`anthropic/errors.go:31-33`、`ollama/errors.go:38-46`、`minimax/errors.go:28-31`）。补全这一块成本极低（OpenAI 已有现成模板 `openai/errors.go:33-38`）。
+**建议**：在每个 typed error 上加结构化字段（已部分支持，比如 `RateLimitError.RetryAfter`）。**状态截至 2026-05-22**：原文叙述的 Anthropic / Ollama / MiniMax 三家"都没解析 `Retry-After`"问题 **已 5/5 全部 lift**（P1-9 已合）：anthropic + minimax 通过 PR #19，ollama 通过 PR #20（commit 537b351）；deepseek 已在历史 PR 同步落地。当前 `openai/anthropic/deepseek/minimax/ollama` 5 个 `errors.go` 均含 `Retry-After` 解析路径，K4 retry 信号完整。原叙述保留以记录评审日（2026-05-21）状态。
 
 ### 7.3 可观测性层
 
@@ -918,9 +918,9 @@ type ProviderObserver interface {
 
 #### 7.4.2 Capability 声明的 ergonomics
 
-DeepSeek / MiniMax 现在 caps 硬编码（CONCERNS.md `:72-77`）。即使行为上当前正确，也违反 K2 的精神。
+~~DeepSeek / MiniMax 现在 caps 硬编码~~（**已修，状态截至 2026-05-22**）：P1-8 已合（PR #18 commit 5f619dd + 4484ac0），`deepseek/capabilities.go` + `minimax/capabilities.go` 已落地 `capabilitiesForModel`，K2 精神对齐。保留下方原建议示例以记录设计依据。
 
-**建议**：每个 provider 加 `capabilitiesForModel(model) llm.Capabilities` 辅助，即使所有 case 都返回同一字面量：
+**原建议（现已落地）**：每个 provider 加 `capabilitiesForModel(model) llm.Capabilities` 辅助，即使所有 case 都返回同一字面量：
 
 ```go
 // deepseek/capabilities.go
