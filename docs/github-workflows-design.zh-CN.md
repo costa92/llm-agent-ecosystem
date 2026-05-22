@@ -422,7 +422,53 @@ external contributor opens PR
 7. 确认 `llm-agent` 的 `umbrella.yml` 仍能拉起下游联动编译。
 8. 确认 `release/**` 分支上的 `replace` 仍会被拒绝。
 
-## 15. 一句话结论
+## 15. 后续统一提交流程
+
+从现在开始，后续所有代码提交都应默认走这套流程，而不是绕过它：
+
+1. 从仓库默认分支拉出功能分支或修复分支。
+2. 在分支上提交代码，不直接推默认分支。
+3. 创建 PR，让仓库内 CI 与 `pr-governance.yml` 自动运行。
+4. 等待 required checks 至少满足：
+   - `go`
+   - `governance`
+5. 如果 PR 作者是 `costa92`：
+   - 由 `pr-governance.yml` 自动开启 auto-merge
+   - checks 通过后自动合并
+   - 合并后由 workflow 删除同仓库分支
+6. 如果 PR 作者不是 `costa92`：
+   - 自动 request review 给 `costa92`
+   - 必须由 `costa92` 审批当前 head 后才允许合并
+   - 合并保持手动
+
+这条流程的约束结论是：
+
+- 默认分支不再作为日常直推入口。
+- PR 才是标准变更入口。
+- `governance` 才是 author-sensitive merge gate。
+- owner PR 自动合并是标准路径，不是临时例外。
+
+### 15.1 对受保护仓库的含义
+
+对于已经启用默认分支保护的仓库，这不是建议，而是唯一稳定路径：
+
+- 直接 `git push origin main`
+- 或 `git push origin master`
+
+会因为 required checks 或 protection 而被拒绝，这属于预期行为。
+
+### 15.2 对尚未补齐设置仓库的含义
+
+即使某些仓库当前线上设置还未完全补齐，后续也应按同一流程提交代码，而不是把“现在还能直推”当成长期工作方式。
+
+也就是说，文档、workflow、仓库设置三者最终要对齐到同一个规则：
+
+- 所有代码修改通过 PR 进入默认分支
+- 所有默认分支合并受 `go + governance` 约束
+- owner PR 自动合并
+- external PR 保持 owner 审核
+
+## 16. 一句话结论
 
 这套 GitHub workflows 设计本质上是 3 层：
 

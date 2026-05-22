@@ -176,7 +176,22 @@ owner PR
    - 未审批 current head 前 `governance` 为失败
    - 审批 current head 后 `governance` 变绿
 
-## 11. 常见错误配置
+## 11. 后续提交代码的统一规则
+
+从现在开始，后续提交代码都应按这套 GitHub 流程走：
+
+1. 从默认分支切新分支。
+2. 在分支上开发并提交。
+3. 推分支并创建 PR。
+4. 等待 `go` 与 `governance`。
+5. owner PR 走自动合并。
+6. external PR 走 `costa92` 审核。
+
+不再把“直接推默认分支”视为正常提交流程。
+
+如果某个仓库当前还能直推，那只代表线上 protection 还没补齐，不代表这是推荐做法。
+
+## 12. 常见错误配置
 
 1. 打开了 `go`，但忘了把 `governance` 设成 required check。
 2. 还保留 GitHub required approving review，结果 owner PR 继续被平台卡住。
@@ -184,7 +199,7 @@ owner PR
 4. 把 `deleteBranchOnMerge` 当成唯一删除机制，忽略了主删除路径其实在 `pr-governance.yml`。
 5. 在 PR 分支里修改 workflow 后，误以为当前这个 PR 会立刻使用新 workflow；但 `pull_request_target` 实际使用的是默认分支版本。
 
-## 12. 一句话结论
+## 13. 一句话结论
 
 GitHub 仓库设置层的职责很简单：
 

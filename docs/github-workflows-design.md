@@ -397,6 +397,54 @@ Today the important property is behavioral consistency, not file deduplication.
 7. Confirm `llm-agent` umbrella validation still builds downstream repos.
 8. Confirm `release/**` still rejects `replace` directives.
 
+## Required Submission Flow
+
+From this point on, future code changes should follow this workflow by default rather than bypassing it:
+
+1. Create a feature or fix branch from the repository's default branch.
+2. Commit on that branch instead of pushing directly to the default branch.
+3. Open a PR and let repo CI plus `pr-governance.yml` run automatically.
+4. Wait until the required checks at least include:
+   - `go`
+   - `governance`
+5. If the PR author is `costa92`:
+   - `pr-governance.yml` enables auto-merge
+   - the PR merges automatically after checks pass
+   - the workflow deletes the same-repo branch after merge
+6. If the PR author is not `costa92`:
+   - review is requested from `costa92`
+   - a current-head approval from `costa92` is required before merge
+   - the merge remains manual
+
+Operationally, this means:
+
+- the default branch is no longer the normal direct-push entrypoint
+- PRs are the standard change entrypoint
+- `governance` is the author-sensitive merge gate
+- owner auto-merge is the standard path, not a special exception
+
+### What this means for protected repos
+
+For repositories with default-branch protection enabled, this is not just a recommendation. It is the only stable path.
+
+Direct pushes such as:
+
+- `git push origin main`
+- `git push origin master`
+
+should be expected to fail when protection and required checks are working correctly.
+
+### What this means for repos not yet fully aligned
+
+Even where GitHub-side settings are not yet fully aligned, future submissions should still follow the same PR-based process rather than treating current direct-push capability as the long-term model.
+
+The workflow files, repository settings, and contributor behavior should converge on the same rule:
+
+- all code changes land through PRs
+- default-branch merges are gated by `go + governance`
+- owner PRs auto-merge
+- external PRs require owner review
+
 ## One-Line Summary
 
 The ecosystem's GitHub workflow design has three layers:
