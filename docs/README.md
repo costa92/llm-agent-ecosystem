@@ -82,6 +82,7 @@ source-design-          source-design-                                   │
 | [`github-workflows-design.md`](./github-workflows-design.md) | English version of the workflows design guide |
 | [`github-repo-settings-runbook.zh-CN.md`](./github-repo-settings-runbook.zh-CN.md) | GitHub 仓库设置、branch protection、auto-merge 与自动删分支的运维清单 |
 | [`github-web-ui-setup-runbook.zh-CN.md`](./github-web-ui-setup-runbook.zh-CN.md) | GitHub Web UI 点击路径式配置步骤，覆盖 Settings、Rulesets、Branch protection 与验收流程 |
+| [`github-settings-audit-matrix.zh-CN.md`](./github-settings-audit-matrix.zh-CN.md) | 基于 GitHub 实时查询结果的仓库设置审计矩阵，区分已对齐仓库与待修复仓库 |
 
 ### 2.6 速记 / 笔记
 
