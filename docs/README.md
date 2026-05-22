@@ -81,6 +81,7 @@ source-design-          source-design-                                   │
 | [`github-workflows-design.zh-CN.md`](./github-workflows-design.zh-CN.md) | 6 个子项目的 GitHub Actions 工作流盘点、主路径、兜底路径与治理设计 |
 | [`github-workflows-design.md`](./github-workflows-design.md) | English version of the workflows design guide |
 | [`github-repo-settings-runbook.zh-CN.md`](./github-repo-settings-runbook.zh-CN.md) | GitHub 仓库设置、branch protection、auto-merge 与自动删分支的运维清单 |
+| [`github-web-ui-setup-runbook.zh-CN.md`](./github-web-ui-setup-runbook.zh-CN.md) | GitHub Web UI 点击路径式配置步骤，覆盖 Settings、Rulesets、Branch protection 与验收流程 |
 
 ### 2.6 速记 / 笔记
 
