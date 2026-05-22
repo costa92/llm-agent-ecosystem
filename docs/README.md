@@ -74,7 +74,13 @@ source-design-          source-design-                                   │
 |---|---|
 | [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) | 重构计划与短/中/长期优化路线（v1.2 → v1.3 → v2） |
 
-### 2.5 速记 / 笔记
+### 2.5 CI / Workflows 设计
+
+| 文档 | 内容 |
+|---|---|
+| [`github-workflows-design.zh-CN.md`](./github-workflows-design.zh-CN.md) | 6 个子项目的 GitHub Actions 工作流盘点、主路径、兜底路径与治理设计 |
+
+### 2.6 速记 / 笔记
 
 | 文档 | 内容 |
 |---|---|
@@ -106,6 +112,7 @@ PR review 时，**必须**同步本目录文档的场景：
 - ✅ 改动跨仓依赖方向 → 同步更新 `README.md`（生态根）+ `source-design-umbrella-root.zh-CN.md` §7 + 架构图 §1
 - ✅ 引入 / 删除 CI 闸子 → 更新 `source-design-umbrella-root.zh-CN.md` §6 + 架构图 §10
 - ✅ 改动 `Makefile` target 或 `scripts/` → 更新 `source-design-umbrella-root.zh-CN.md` §3 / §10
+- ✅ 改动 `.github/workflows/*`、branch protection 约定、PR 自动合并 / 自动删分支链路 → 更新 `github-workflows-design.zh-CN.md`
 
 ### 4.2 PR 检查清单（针对文档贡献）
 
