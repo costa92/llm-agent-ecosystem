@@ -54,9 +54,9 @@
 
 | Repo | Default Branch | Allow Auto-Merge | Delete Branch On Merge | Allow Merge Commit | Allow Squash | Allow Rebase | 结论 |
 |---|---|---:|---:|---:|---:|---:|---|
-| `llm-agent` | `main` | `false` | `true` | `true` | `true` | `true` | 未对齐 |
-| `llm-agent-rag` | `master` | `false` | `true` | `true` | `true` | `true` | 未对齐 |
-| `llm-agent-flow` | `main` | `false` | `true` | `true` | `true` | `true` | 未对齐 |
+| `llm-agent` | `main` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
+| `llm-agent-rag` | `master` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
+| `llm-agent-flow` | `main` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
 | `llm-agent-providers` | `main` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
 | `llm-agent-otel` | `main` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
 | `llm-agent-customer-support` | `main` | `true` | `true` | `true` | `true` | `true` | 已对齐 |
@@ -65,12 +65,12 @@
 
 | Repo | Default Branch | 保护状态 | Required Checks | Enforce Admins | 结论 |
 |---|---|---|---|---:|---|
-| `llm-agent` | `main` | 无 protection | 无 | — | 未对齐 |
-| `llm-agent-rag` | `master` | 无 protection | 无 | — | 未对齐 |
-| `llm-agent-flow` | `main` | 无 protection | 无 | — | 未对齐 |
+| `llm-agent` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
+| `llm-agent-rag` | `master` | 有 protection | `go`, `governance` | `true` | 已对齐 |
+| `llm-agent-flow` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
 | `llm-agent-providers` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
 | `llm-agent-otel` | `main` | 有 protection | `go`, `governance` | `true` | 已对齐 |
-| `llm-agent-customer-support` | `main` | 有 protection | `go`, `governance` | `true` | 部分对齐 |
+| `llm-agent-customer-support` | `main` | 有 protection | `go`, `governance` | `true` | 基本对齐 |
 
 ### 3.3 workflow 文件矩阵
 
@@ -85,10 +85,13 @@
 
 ## 4. 关键发现
 
-### 4.1 已经完整对齐的仓库
+### 4.1 已经完成核心对齐的仓库
 
-以下 3 个仓库线上设置与当前治理设计基本一致：
+当前 6 个仓库都已经完成核心治理配置对齐：
 
+- `llm-agent`
+- `llm-agent-rag`
+- `llm-agent-flow`
 - `llm-agent-providers`
 - `llm-agent-otel`
 - `llm-agent-customer-support`
@@ -100,26 +103,22 @@
 - 默认分支存在 protection
 - required checks 包含 `go` 与 `governance`
 
-### 4.2 当前未对齐的仓库
+### 4.2 本次补齐的线上配置
 
-以下 3 个仓库当前还没有把 GitHub 仓库设置完全补齐：
+这次已实际补齐以下 3 个仓库的 GitHub 线上设置：
 
 - `llm-agent`
 - `llm-agent-rag`
 - `llm-agent-flow`
 
-共同问题：
+补齐内容包括：
 
-1. `allow_auto_merge = false`
-2. 默认分支 protection 缺失
-
-这意味着虽然仓库里已经有：
-
-- `pr-governance.yml`
-- `delete-merged-branch.yml`
-- 基础 CI workflow
-
-但 GitHub 仓库侧环境还不足以让完整治理链路真正稳定落地。
+1. 打开 `allow_auto_merge`
+2. 为默认分支添加 protection
+3. required checks 统一为：
+   - `go`
+   - `governance`
+4. `enforce_admins = true`
 
 ### 4.3 `llm-agent-customer-support` 的备注
 
@@ -136,6 +135,12 @@
 
 所以它是“治理层已对齐”，但如果团队未来要把更完整的 CI 结果也升为必过项，还可以继续增强。
 
+另外，它当前是 6 个仓库里唯一一个：
+
+- `allow_force_pushes = true`
+
+这不影响 `go + governance` 主治理链路，但从一致性角度看，后续可评估是否也收紧到 `false`。
+
 ### 4.4 `llm-agent-flow` 的额外缺口
 
 `llm-agent-flow` 当前除了 GitHub 仓库设置未对齐外，还有一个 workflow 级差异：
@@ -148,51 +153,39 @@
 
 ### 5.1 总体状态
 
-可以把当前 6 个仓库分成两组：
+当前 6 个仓库已经全部完成核心治理落地：
 
-#### A 组：治理已完整落地
-
-- `llm-agent-providers`
-- `llm-agent-otel`
-- `llm-agent-customer-support`
-
-#### B 组：workflow 已推送，但 GitHub 仓库设置未补齐
-
-- `llm-agent`
-- `llm-agent-rag`
-- `llm-agent-flow`
+- 仓库级 `allow_auto_merge = true`
+- 仓库级 `delete_branch_on_merge = true`
+- 默认分支 protection 存在
+- required checks 为 `go + governance`
 
 ### 5.2 当前最重要的待修复项
 
-优先级最高的 4 项：
-
-1. 在 `llm-agent` 打开 `Allow auto-merge`
-2. 在 `llm-agent-rag` 打开 `Allow auto-merge`
-3. 在 `llm-agent-flow` 打开 `Allow auto-merge`
-4. 为这 3 个仓库的默认分支补上 protection / ruleset，至少要求 `go` 与 `governance`
-
-### 5.3 次级待修复项
+目前剩余的不是核心阻塞项，而是一致性增强项：
 
 1. 为 `llm-agent-flow` 补上 `release-precheck.yml`
 2. 评估是否将 `llm-agent-customer-support` 的 `format` / `compose` / `docker` 也纳入 required checks
+3. 评估是否将 `llm-agent-customer-support` 的 `allow_force_pushes` 从 `true` 收紧到 `false`
+
+### 5.3 次级待修复项
+
+1. 周期性复核 6 个仓库 settings 是否仍保持一致
+2. 若后续新增仓库，按同样矩阵补齐治理面
 
 ## 6. 推荐下一步
 
 建议按下面顺序收口：
 
-1. 先按 [`github-web-ui-setup-runbook.zh-CN.md`](./github-web-ui-setup-runbook.zh-CN.md) 补 `llm-agent`、`llm-agent-rag`、`llm-agent-flow` 的 GitHub 仓库设置
-2. 再重新执行一次本审计矩阵
-3. 若要完全统一治理面，再补 `llm-agent-flow` 的 `release-precheck.yml`
+1. 重新跑一次 owner PR 验证，确认 `llm-agent`、`llm-agent-rag`、`llm-agent-flow` 现在也能稳定 auto-merge
+2. 为 `llm-agent-flow` 补上 `release-precheck.yml`
+3. 评估是否继续统一 `customer-support` 的 protection 细节
 
 ## 7. 一句话总结
 
-当前不是所有仓库都“已经完全可用”。
+当前 6 个仓库的核心 GitHub 治理设置已经全部对齐。
 
-准确说法是：
-
-- 6 个仓库的 workflow 文件已经基本铺开
-- 但只有 `providers`、`otel`、`customer-support` 这 3 个仓库的 GitHub 线上设置已经和治理设计真正对齐
-- `llm-agent`、`llm-agent-rag`、`llm-agent-flow` 还需要补 GitHub 仓库级设置与默认分支保护
+现在的剩余工作，不再是“能不能用”，而是“是否要继续把一些细节也统一到完全一致”。
 
 ## 延伸阅读
 
