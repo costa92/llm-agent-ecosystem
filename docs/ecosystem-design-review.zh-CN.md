@@ -139,12 +139,12 @@ flowchart TB
 |---|---|---|
 | openai | `openai/openai.go:108-231` 的 `chunkEvents` | GREEN |
 | anthropic | `anthropic/anthropic.go:122-197` 内嵌 `blockKinds map`，自然带 content_block index | GREEN |
-| ollama | `ollama/ollama.go:197-313` 的 ingest 状态机 | **YELLOW** — 流路径下 tool 信息只在 done 帧到达，buffer-then-parse 没做流式增量；`docs/source-design-llm-agent-providers.zh-CN.md:436-438` |
-| deepseek/minimax | 与 openai/anthropic 几乎镜像 | GREEN（代码层 + 测试覆盖：cancel + partial-usage conformance 已在 P1-7 中纳入矩阵，PR #17 providers，状态截至 2026-05-22）|
+| ollama | `ollama/ollama.go:211-327` 的 ingest 状态机 | GREEN（自 commit 32f5d59，2026-05-20）—— 流路径下两条 tool 发射路径均已发流式 K1 事件三元组：native `tool_calls` 帧（`:244-260`）与 content-parsed `<tool_call>...</tool_call>` 解析后（`:280-302`），per-call `Index` 在 `r.nextIdx` 中按到达顺序合成。per-provider 测试覆盖 `TestStream_Ollama_NativeToolCalls`（`ollama_test.go:609`）+ `TestStream_Ollama_QwenXMLContentToolCalls`（`ollama_test.go:670`），跨 provider K1 conformance gate `TestStreamToolCalls_Conformance` 覆盖 5/5 provider（6 用例含 ollama 两条路径） |
+| deepseek/minimax | 与 openai/anthropic 几乎镜像 | GREEN（代码层 + 测试覆盖：cancel + partial-usage conformance 已在 P1-7 中纳入矩阵，PR #17 providers，状态截至 2026-05-22；K1 tool-stream conformance 已在 2026-05-23 K1 ollama lift 中纳入 `TestStreamToolCalls_Conformance`）|
 | flow | `flow/event.go:14-34` 的 `FlowEvent{Kind, ...}` 与 K1 同形 | GREEN |
 | otelmodel.streamReader | first-token event + EventDone | GREEN（trace 端），**但 metric 端没接** —— `docs/source-design-llm-agent-otel.zh-CN.md:706-707`：`timeToFirst` histogram 已 build 但 wrapper 没调用 |
 
-**结论**：K1 接口设计 GREEN，**streaming 工具完备性 + 指标侧接入是这套生态最大的隐藏债**。
+**结论**：K1 接口设计 GREEN，**5/5 provider streaming 工具发射均已 conform**（2026-05-23 K1 ollama YELLOW lift 完成，跨 provider conformance gate 落地）。剩余债务集中在**指标侧接入**——`otelmodel.streamReader` 的 `timeToFirst` histogram 已 build 但 wrapper 没调用。
 
 ### 2.5 信条 5：Capability progressive enhancement（type assertion）
 
@@ -168,7 +168,7 @@ flowchart TB
 
 | Keystone | 决策内容 | 执行评分 | 主要证据（file:line） |
 |---|---|---|---|
-| **K1** | StreamEvent typed union + per-tool-call Index 稳定 | YELLOW | 接口 GREEN（`llm/stream.go:21-70`），但 `AccumulateStream` 实际按 `ID` 键合（`llm/stream.go:130-145`，注释明示 "NOT the production accumulator"）；ollama 流路径不发流式 tool event |
+| **K1** | StreamEvent typed union + per-tool-call Index 稳定 | GREEN | 接口 GREEN（`llm/stream.go:21-70`）；ollama 流路径自 commit `32f5d59`（2026-05-20）起已发流式 tool 事件三元组（native + content-parsed 两条路径，`ollama/ollama.go:211-327`）；2026-05-23 跨 provider K1 conformance gate `TestStreamToolCalls_Conformance`（`internal/contract/generate_test.go`）落地，覆盖 5/5 provider（6 用例含 ollama 两条路径），pin 住每 call Index 在 Start → ArgsDelta → End 间稳定 + Done 终止帧带 Usage 与 FinishReason。**留给 v0.6.0**：`llm-agent/llm/stream.go::appendToolCallDelta` 仍按 ID 键合（注释明示 "NOT the production accumulator"，frozen core minor bump 才能改） |
 | **K2** | Capabilities per (provider × model) | GREEN | 5/5 provider GREEN：deepseek/minimax 已加 `capabilitiesForModel` 辅助（`deepseek/capabilities.go` + `minimax/capabilities.go`，P1-8 已合 PR #18 providers，状态截至 2026-05-22）|
 | **K3** | OTel as decorator wrapper, never hooks | GREEN | core 0 行 OTel；8-wrapper 矩阵（`otelmodel/otelmodel.go:14-49`）；rag Observer 二级备选（`otelrag/otelrag.go:184-232`） |
 | **K4** | 三态 cost（reported/estimated/unknown）+ retry 状态机 | GREEN | 三态在 `llm/types.go:78-82` 已定义；retry 状态机**留给 provider 实现**：5/5 provider 已解析 `Retry-After`（openai `errors.go:33-38` / anthropic / deepseek / minimax / ollama 全部已 lift；P1-9 已合，PR #19 + PR #20 providers，状态截至 2026-05-22）|
@@ -180,7 +180,7 @@ flowchart TB
 | CC-1 | Budget chokepoint at generateFromPrompt | GREEN | `agent_chatmodel.go:11-54` 覆盖所有 5 个 agent 范式 |
 | CC-2 | Policy middleware (8-wrapper tree) | GREEN | `policy/policy.go:43-67` |
 
-**总评分**（状态截至 2026-05-22）：12 个 keystone / 主要决策中 11 GREEN、1 YELLOW、0 RED。**唯一 YELLOW（K1）的根因是 `AccumulateStream` 仍是 ID-keyed 占位 + ollama 流路径不发流式 tool event**。原评审时的 4 YELLOW 中，K2/K4/K7 已分别通过 P1-8、P1-9、P0-1 三轮 PR 完成 lift。
+**总评分**（状态截至 2026-05-23）：12 个 keystone / 主要决策中 **12 GREEN、0 YELLOW、0 RED**。原评审时的 4 YELLOW 已全部 lift：K2 → P1-8（PR #18 providers），K4 → P1-9（PR #19 + PR #20 providers），K7 → P0-1（PR #11 customer-support），K1 → 2026-05-23 cross-provider conformance gate（`TestStreamToolCalls_Conformance`）+ 历史已存在的 ollama K1-conformant 发射代码（commit `32f5d59`，2026-05-20）。K1 YELLOW 在源码层早已修复，仅 conformance 层缺一道 gate；本次补齐后 keystone scorecard 至此清零。**唯一未来 follow-up（不影响 GREEN 评分）**：`llm-agent/llm/stream.go::appendToolCallDelta` ID-keyed 占位（注释明示），v0.6.0 minor bump 替换为 Index-keyed 生产实现。
 
 ---
 
@@ -430,7 +430,7 @@ $ ls llm-agent/rag/
 1. **未运行 benchmark**：本文所有性能瓶颈都基于代码静态判断 + 注释信息（如 `rag/import.go:76` 是 embed 串行）。真实吞吐瓶颈需要在生产数据集上 pprof + go test -bench 验证。
 2. **未审 CI 工作流文件**：B2/B3/B4 闸子从 git log + commit message 推断，未读 `.github/workflows/*.yml`。深读补的可能性见路线图 §7。
 3. **未交叉对照 `.planning/`**：六个仓各自的 `.planning/PROJECT.md` / `STATE.md` / `ROADMAP.md` 未参与本审；如有冲突以 6 份深读文档为准。
-4. **未跑实测 Ollama live**：`internal/contract/ollama_live_test.go` 的 nightly 行为未验证，K1 YELLOW 评分仅基于源码分析。
+4. **未跑实测 Ollama live**：`internal/contract/ollama_live_test.go` 的 nightly 行为未验证；K1 评分（2026-05-23 lift 至 GREEN）基于源码分析 + per-provider mock 测试 + 跨 provider conformance gate，但 live 路径未在本审周期触发。
 5. **未审第三方驱动版本风险**：`modernc.org/sqlite` / `lib/pq` / `pgvector-go` 等版本固化策略本审未深查；只指出"rag 端 fixed-point"原则的存在。
 6. **JSON Schema for flow IR 不存在仅基于 grep / ls**：未排除"在另一未读目录"的可能（虽然 `docs/source-design-llm-agent-flow.zh-CN.md:935-942` 也写明缺失）。
 7. **`llm-agent` 的 `examples/` 子 module 未独立审**：只在深读文档中看到 8 个 demo 列表，未读源码。
@@ -456,7 +456,7 @@ $ ls llm-agent/rag/
 
 | 编号 | 决策 | 仓 | 评分 |
 |---|---|---|---|
-| K1 | StreamEvent typed union + Index | core | YELLOW |
+| K1 | StreamEvent typed union + Index | core / providers | GREEN（2026-05-23 ollama YELLOW lift；`TestStreamToolCalls_Conformance` 覆盖 5/5 provider 6 用例）|
 | K2 | Capabilities per (provider × model) | providers / core | GREEN（P1-8 已合，状态截至 2026-05-22）|
 | K3 | OTel as decorator wrapper | otel / 全生态 | GREEN |
 | K4 | 三态 cost + retry 状态机 | providers / core | GREEN（P1-9 已合 5/5，状态截至 2026-05-22）|
