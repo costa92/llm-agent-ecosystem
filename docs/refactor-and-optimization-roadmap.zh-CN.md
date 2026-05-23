@@ -265,6 +265,8 @@ go mod tidy
 
 #### P1-22 customer-support：`/readyz` 真正 ping db/model
 
+> **状态（2026-05-22）：已 merge to master，PR #16 customer-support，commit fd78a40**。`internal/app/app.go:134` 现注入 `makeReadyFunc(sessions, embedder, cfg.ReadinessProbeEmbedder)`（详细实现见 `app.go:234-256`），实装 db PingContext + 1s embedder Embed 双探测；新增 `READINESS_PROBE_EMBEDDER` env 开关；测试 `httpapi/handlers_test.go` 验证 `/readyz` 在 db/embedder 故障时返回 503 + 错误消息。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent-customer-support` | **Effort**：S | **Impact**：C
 
 **现状**：`internal/app/app.go:130` 注入 `ReadyFunc = func(ctx) error { return nil }`，readiness 永远 200。`/readyz`（`httpapi.go:212-224`）调用它。
@@ -388,6 +390,8 @@ if be, ok := s.embedder.(embed.BatchEmbedder); ok {
 
 #### P1-17 flow：SQLite WAL + multi-VALUES INSERT
 
+> **状态（2026-05-22）：WAL 部分已 merge to master，PR #2 flow v0.1.2**。`flow/store/sqlite/open.go` 已对 on-disk DSN 启用 `PRAGMA journal_mode=WAL` + `PRAGMA synchronous=NORMAL`；multi-VALUES INSERT 仍 pending（v0.1.1 显式事务 + Prepare + 循环 ExecContext 路径继续生效）。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent-flow` | **Effort**：S | **Impact**：B
 
 **现状**：`flow/store/sqlite/open.go:51-92` Schema 不开 WAL；`events.go:20-54` `AppendRunEvent` 是单语句 `INSERT INTO run_events ... COALESCE(MAX(seq)+1,0)`，每事件 ~5ms（FULL fsync）；v0.1.1 批量版 `AppendRunEvents` 走显式事务 + Prepare + 循环 ExecContext，比单条快 5x 但仍 N 次 Exec。
@@ -460,6 +464,8 @@ if be, ok := s.embedder.(embed.BatchEmbedder); ok {
 ### 3.3 P1 架构相关
 
 #### P1-23 providers：抽 `internal/openaicompat` / `anthropiccompat`
+
+> **状态（2026-05-22）：定为 v1.4 路线**。P1-7/P1-8/P1-9 已在 v1.3 first/second wave 内单独打补丁完成（不阻塞 P1-6 default timeout）；compat 抽象的成本/收益判断推迟到 v1.4 窗口再统一评估（届时 P1-6 timeout 默认值也会一并放进 compat 包）。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-providers` | **Effort**：L | **Impact**：A
 
@@ -553,6 +559,8 @@ case VectorIndexHNSW:
 
 #### P1-3 llm-agent：comm/a2a 后台 goroutine ctx 修复
 
+> **状态（2026-05-22）：已 merge to master，PR #3 llm-agent，commit 860dd20**。`comm/a2a/server.go:111` 起 worker 用 `ctx, cancel := context.WithCancel(...)`，cancel 存入 `Task.cancel` 字段；`comm/a2a/task.go:112` 实现 `cancelAndFail`；新增 `DELETE /tasks/{id}` 端点 invokes `cancelAndFail`；测试 `comm/a2a/server_test.go` 增 RED→GREEN 用例（commit 75b92f6）。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent` | **Effort**：S | **Impact**：B
 
 **现状**：`comm/a2a/server.go:128-129` 起 worker 用 `context.Background()`：
@@ -601,6 +609,8 @@ func (s *Server) handleDeleteTask(...) {
 ---
 
 #### P1-4 llm-agent：runStreamFromBlocking ctx-cancel 时发 Done event
+
+> **状态（2026-05-22）：已 merge to master，PR #2 llm-agent，commit 8ffed58（merge 44f547d）**。`agent.go:126-128` 已实装方案 A：在 ctx 取消路径上 best-effort 推 `final.Err = ctx.Err()`；测试 `agent_test.go::TestRunStreamFromBlocking_EmitsDoneOnCancel` 已通过。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent` | **Effort**：S | **Impact**：A
 
@@ -694,6 +704,8 @@ cd ../llm-agent-customer-support && go build ./...
 
 #### P1-6 providers：5 个 provider 加 default timeout
 
+> **状态（2026-05-22）：unblocked，等 v1.3 next wave 实施**。原本计划在 P1-9 Retry-After 5/5 闭合后才动；现 PR #20 ollama Retry-After 已 merge（commit 537b351），P1-9 已闭合（5/5）。P1-6 可在 next wave 内单仓 PR 完成（不再需要等待 P1-23 compat 抽取，详见 P1-23 v1.4 路线说明）。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent-providers` | **Effort**：S | **Impact**：A
 
 **现状**：5 个 `options.go` 的 `New` 函数不设默认 timeout（`docs/source-design-llm-agent-providers.zh-CN.md:858-868`），用户从不调 `WithTimeout` → 永挂连接让 Generate 永远 block。
@@ -726,6 +738,8 @@ if cfg.httpClient == nil {
 ---
 
 #### P1-9 providers：anthropic/ollama/minimax 解析 Retry-After
+
+> **状态（2026-05-22）：已 merge to master，5/5 闭合**。PR #19（anthropic + minimax）与 PR #20（ollama，commit 537b351）相继合并；deepseek 已在历史 PR 同步落地。当前 `openai/anthropic/deepseek/minimax/ollama` 5 个 `errors.go` 均含 `Retry-After` 解析路径（结构化字段 `RateLimitError.RetryAfter`）。K4 retry 信号完整，与 §1.2 总评 "K4 GREEN" 一致。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-providers` | **Effort**：S | **Impact**：A
 
@@ -957,6 +971,8 @@ type Config struct {
 
 #### P1-7 providers：DeepSeek/MiniMax 补 cancel + partial-usage conformance
 
+> **状态（2026-05-22）：已 merge to master，PR #17 providers**。`internal/contract/generate_test.go` 的 providers 列表已含 `deepseek` 和 `minimax`；fixtures `testdata/deepseek/stream_cancel.json` + `testdata/minimax/stream_cancel.json` + `*_stream_partial_usage_error.json` 已落地；K2/K4 conformance 矩阵 5/5 闭合。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent-providers` | **Effort**：S | **Impact**：A
 
 **现状**：`internal/contract/generate_test.go:281-375` 的 `TestStream_CancelMidStream_Conformance` / `TestStream_PartialUsageOnError_Conformance` 只跑 openai/anthropic/ollama，deepseek/minimax 没在 fixture 矩阵里。
@@ -979,6 +995,8 @@ cd llm-agent-providers && go test ./internal/contract/... -run TestStream_Cancel
 ---
 
 #### P1-8 providers：DeepSeek/MiniMax 显式 capabilitiesForModel
+
+> **状态（2026-05-22）：已 merge to master，PR #18 providers，commits 5f619dd（deepseek）+ 4484ac0（minimax）**。`deepseek/capabilities.go` + `minimax/capabilities.go` 已落地 `capabilitiesForModel(model string) llm.Capabilities`；`options.go:93` 已改为 `Capabilities: capabilitiesForModel(cfg.model)`；测试 `*_test.go::TestCapabilities_ReflectModel` 已通过。K2 keystone GREEN（详见 ecosystem-design-review §2.2 / §3 keystone 表）。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-providers` | **Effort**：S | **Impact**：A
 
@@ -1010,6 +1028,8 @@ func capabilitiesForModel(model string) llm.Capabilities {
 ---
 
 #### P1-18 flow：FlowEvent.Metadata 字段加
+
+> **状态（2026-05-22）：已 merge to master，PR #3 flow v0.1.3，commits 77e5be1 + 373abf6 + e637e21 + 2157b1f**。`flow/event.go` 已加 `Metadata map[string]string`（additive，不破 apisnapshot）；新增 `MetadataAware` optional capability；引擎 `propagate MetadataAware metadata to NodeFinished events`；flowd SSE payload 同步 propagate；CHANGELOG bumped v0.1.3。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-flow` | **Effort**：S | **Impact**：B
 
@@ -1244,19 +1264,26 @@ DX 缺口集中三类：
 
 只做 P0：
 
-- P0-1 guardrails wiring fix（0.5 人天）
-- P0-2 RAG facade 决策与落地（2 人天）
+- P0-1 guardrails wiring fix（0.5 人天）**(done, 2026-05-22, PR #11 customer-support commit 9171a0a)**
+- P0-2 RAG facade 决策与落地（2 人天）**(done, 2026-05-22, drop-dependency 路径, commit 6029565)**
 
 ### 6.2 v1.3 milestone（4-6 周）
 
 主题：**"Streaming 完备性 + 可观测三联"**。
 
+> **进度盘点（2026-05-22）**：
+> - **first wave 完成**：P1-3 / P1-4 / P1-22（PR #3 llm-agent + PR #2 llm-agent + PR #16 customer-support）+ P1-9 已 5/5 闭合（PR #19 + PR #20 providers）。剩 **P1-6 providers default timeout** —— unblocked，等 next wave。
+> - **fourth wave 部分完成**：P1-7（PR #17 providers）+ P1-8（PR #18 providers）+ P1-18（PR #3 flow v0.1.3）。剩 P1-19 / P1-20 / P1-21。
+> - **third wave 部分完成**：P1-17 WAL 已 merge（PR #2 flow v0.1.2）；multi-VALUES INSERT 仍 pending。
+> - **second wave 未启动**：P1-10 / P1-11 / P1-12 / P1-14 待 next wave。
+> - 同步：P0-1（commit 9171a0a）+ P0-2（commit 6029565）已在 v1.2 收尾完成（详见 §6.1）。
+
 第一波（架构修复）：
-- P1-3 a2a goroutine ctx
-- P1-4 RunStream ctx-cancel Done
+- P1-3 a2a goroutine ctx **(done, PR #3 llm-agent)**
+- P1-4 RunStream ctx-cancel Done **(done, PR #2 llm-agent)**
 - P1-6 providers default timeout
-- P1-9 Retry-After 解析（3 个 provider）
-- P1-22 customer-support readyz 真探测
+- P1-9 Retry-After 解析（5 个 provider 闭合）**(done, PR #19 + PR #20 providers, 5/5)**
+- P1-22 customer-support readyz 真探测 **(done, PR #16 customer-support)**
 
 第二波（可观测）：
 - P1-10 sampler 暴露
@@ -1264,14 +1291,14 @@ DX 缺口集中三类：
 - P1-12 + P1-14 timeToFirst histogram + Recorder 自动接
 
 第三波（性能）：
-- P1-17 flow SQLite WAL
+- P1-17 flow SQLite WAL **(WAL done, PR #2 flow v0.1.2; multi-VALUES INSERT pending)**
 - P1-1 rag pgvector index
 - P1-16 rag BatchEmbedder
 - P1-15 rag Hybrid 并发
 
 第四波（DX 与测试覆盖）：
-- P1-7 / P1-8 deepseek/minimax conformance + capabilitiesForModel
-- P1-18 FlowEvent.Metadata
+- P1-7 / P1-8 deepseek/minimax conformance + capabilitiesForModel **(done, PR #17 + PR #18 providers)**
+- P1-18 FlowEvent.Metadata **(done, PR #3 flow v0.1.3)**
 - P1-19 toolAgent ReAct 第二轮
 - P1-20 session 历史截断
 - P1-21 flowrunner 接入

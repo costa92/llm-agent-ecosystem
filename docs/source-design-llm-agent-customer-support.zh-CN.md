@@ -208,15 +208,19 @@ Start
 错误统一是 `*limitError`，`HTTPStatus(err)` 用 `errors.As` 提取状态码（`limits.go:115-121`），handler 用它返 429/503。
 
 ### 3.9 Guardrails：production wiring 中的悬空模块（重要发现）
+
+> **2026-05-22 update**：本节描述的 P0-1 bug **已修复**。`internal/app/app.go:113` 现注入 `Guardrails: guardrails.New(guardrails.Config{})`（PR #11 customer-support，commit 9171a0a）。`grep -n "Guardrails: guardrails.New" internal/app/app.go` 现在命中 line 113。`supportflow.allowInput` 现走 production guardrails 实例，prompt-injection 过滤与 untrusted-RAG system prompt 前缀均生效。保留下方原叙述以记录评审时的状态与修复过程。
+
 `internal/guardrails/guardrails.go:9-57` 定义了一个轻量级 prompt-injection 过滤器：
 - 5 个关键词模式（`guardrails.go:23-31`），全部小写包含匹配；
 - `FilterInput` 返回 `(ok, reason)`；
 - `SafeFallback()` 返回固定文案；
 - `SystemPromptPrefix()` 返回「把检索到的知识当作不可信」的前缀。
 
-**`supportflow.go:44-74` 的 `New` 在收到 `opts.Guardrails != nil` 时确实会启用它**——但是 `internal/app/app.go:106-110` 里**production wiring 从未实例化 `*Guardrails`**：
+**`supportflow.go:44-74` 的 `New` 在收到 `opts.Guardrails != nil` 时确实会启用它**——评审日（2026-05-21）时 `internal/app/app.go:106-110` 的**production wiring 从未实例化 `*Guardrails`**：
 
 ```go
+// 评审日原状（已修）
 agent, err := supportflow.New(supportflow.Options{
     Model:     wrappedModel,
     Knowledge: knowledge,
@@ -224,12 +228,12 @@ agent, err := supportflow.New(supportflow.Options{
 })  // 没有 Guardrails 字段
 ```
 
-`grep -rn "Guardrails" /internal/app/ /cmd/` 返回 0 结果。也就是说：
+评审日 `grep -rn "Guardrails" /internal/app/ /cmd/` 返回 0 结果。当时的影响：
 - README 第 7 行声称"day-one prompt-injection defenses"已上线；
 - 单元测试（`supportflow_test.go:141-208`）覆盖了 guardrails 路径；
 - **但在 production 启动的 binary 里，guardrails 永远是 nil**——`allowInput`（`supportflow.go:264-269`）直接返回 `true`；`refund_policy` 工具的 `user_id` 拒绝逻辑虽然不依赖 Guardrails（`supportflow.go:253-255` 在工具内部硬编码），但「system prompt 加 untrusted 前缀」（`supportflow.go:51-53`）和「输入过滤」都不会生效。
 
-这是一个**典型的"测试通过 ≠ 生产生效"配置漏洞**，应立刻修复。
+这是一个**典型的"测试通过 ≠ 生产生效"配置漏洞**——P0-1 PR（commit 9171a0a）通过补一行 `Guardrails: guardrails.New(guardrails.Config{})` + 集成测试 fix 完成。
 
 ---
 
@@ -521,7 +525,7 @@ sequenceDiagram
 
 ### 8.2 健康检查
 - `/healthz`（`httpapi.go:204-210`）：纯静态 200；
-- `/readyz`（`httpapi.go:212-224`）：调用 `Handlers.Ready ReadyFunc`，由 `app.go:130` 注入 `func(ctx) error { return nil }`——**当前 readiness 永远返回 ready**，没有真实地探测 model/embedder/sessionstore 状态。这是一个明显的 demo 简化，生产里应该至少 `db.PingContext(ctx)` + 模型 reachable 检查。
+- `/readyz`（`httpapi.go:212-224`）：调用 `Handlers.Ready ReadyFunc`。**2026-05-22 update**：P1-22 已合并（PR #16 customer-support commit fd78a40）。现注入 `makeReadyFunc(sessions, embedder, cfg.ReadinessProbeEmbedder)`（`app.go:134`），实装双探测：(1) `sessions.PingContext` —— 只在 store 实现 `PingContext(ctx) error` 时执行，1s timeout；(2) `embedder.Embed(["ok"])` —— `READINESS_PROBE_EMBEDDER` env 开关控制，1s timeout。原状（评审日 2026-05-21）：`app.go:130` 注入 `func(ctx) error { return nil }`，readiness 永远返回 ready。
 
 ### 8.3 优雅退出
 - main 通过 `signal.NotifyContext(SIGINT, SIGTERM)` 创建 ctx；
@@ -555,10 +559,13 @@ sequenceDiagram
 
 ### 9.1 架构维度
 
-#### 9.1.1 production wiring 漏掉了 guardrails（**bug 级别**）
-**现状**：`app.go:106-110` 调用 `supportflow.New(Options{...})` 时不传 `Guardrails`，导致 production binary 上 prompt-injection 过滤和「untrusted-RAG」system prompt 前缀**全部失效**。但 README 第 7 行声称这些是 day-one defenses。
+#### 9.1.1 production wiring 漏掉了 guardrails（**bug 级别，已修**）
 
-**修复**：
+> **2026-05-22 update**：本节描述的 P0-1 bug **已修复**（PR #11 customer-support commit 9171a0a）。production wiring 现在传入 `Guardrails: guardrails.New(guardrails.Config{})`（`internal/app/app.go:113`），prompt-injection 过滤和 untrusted-RAG system prompt 前缀均生效。保留下方原叙述与修复 patch 以记录修复过程。
+
+**评审日（2026-05-21）现状**：`app.go:106-110` 调用 `supportflow.New(Options{...})` 时不传 `Guardrails`，导致 production binary 上 prompt-injection 过滤和「untrusted-RAG」system prompt 前缀**全部失效**。但 README 第 7 行声称这些是 day-one defenses。
+
+**已落地的修复**：
 ```go
 agent, err := supportflow.New(supportflow.Options{
     Model:      wrappedModel,
@@ -567,7 +574,7 @@ agent, err := supportflow.New(supportflow.Options{
     Guardrails: guardrails.New(guardrails.Config{}),  // 加这一行
 })
 ```
-另加一个 `app_test.go` 集成测试验证 production wiring 真的拒绝 `"ignore previous instructions ..."`。
+PR #11 同步添加了 `app_test.go` 集成测试验证 production wiring 真的拒绝 `"ignore previous instructions ..."`。
 
 #### 9.1.2 toolAgent 是 ReAct 的"半步"版本
 `toolagent.go:57-133` 实现的是"LLM 调用一次 → 执行所有 ToolCalls → 拼接输出 → 结束"。这不是 ReAct 循环；如果 model 返回 ToolCall 但工具结果还需要二次推理总结，**当前实现会直接把工具原始输出当 answer**——例如返回 `"refund_policy: Refund guidance for order 123: Orders cancelled within 24h..."`，缺一句客服话术润色。
