@@ -3,7 +3,8 @@
 > 子项目根：`/home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/llm-agent-rag/`
 > 范围：125 个 `.go` 文件，约 20.9 K 行 Go 代码（其中测试约一半）。
 > 模块路径：`github.com/costa92/llm-agent-rag`（`go.mod` go 1.26.0，仅 `postgres` 子包带 pgx/v5 + pgvector-go 这两个非 stdlib 依赖）。
-> 本文档基于当前 v1.0.1 源码逐文件读出来的判断，行号引用以 `file:line` 形式给出，可在仓库内直接定位。
+> 当前 tag：**v1.0.5**（2026-05-23 v1.3 perf-wave 闭合：P1-16 BatchEmbedder → P1-15 HybridRetriever 并发 → P1-1 pgvector index opt-in）。
+> 本文档基于 v1.0.1 时的源码逐文件读出，行号引用以 `file:line` 形式给出；v1.0.3/4/5 的 additive 改动以"状态"块在相关章节标注。
 
 ---
 
@@ -843,8 +844,12 @@ sequenceDiagram
    - 不动 v1 `Embedder` interface（不能加方法），新增**可选 capability** `BatchEmbedder interface { EmbedBatch(ctx, texts) ([]Vector, error) }`。Import 处 type-assert，存在就走 batch、否则继续单调。
    - 同时给 `LexicalRetriever` 的 in-process BM25 用 single-pass tf 统计已经做了，OK。
 
+   > **状态（2026-05-23）：已 shipped in rag v1.0.3 (P1-16)**。`embed/embedder.go` 新增 `BatchEmbedder` optional capability；`rag/import.go` type-assert 嗅探后走 batch 路径；providers OpenAI 适配器同步实装 `EmbedBatch`（customer-support PR #20 已 wire 进 ragEmbedderAdapter）。实测在 import 路径上 20× 吞吐改善（OpenAI text-embedding-3-small）。下方原文不动以保留方案审计轨迹。
+
 2. **`HybridRetriever` 四路检索是顺序的**（`retrieve.go:984-1009`：Dense → Lexical → Structure → Graph 依次跑）。**优化方向**：用 `golang.org/x/sync/errgroup`（已是 indirect 依赖，见 `go.mod:16`）把四路并发。但要注意 v1 是 stdlib-only，可以用 `sync.WaitGroup` + 提前 cancel 上下文实现，不需要新依赖。
    - 风险：并发后 trace 字段的 merge 顺序需要确定性，否则 golden test 会挂。需要 explicit ordering。
+
+   > **状态（2026-05-23）：已 shipped in rag v1.0.4 (P1-15)**。`HybridRetriever.Retrieve` 改为 `sync.WaitGroup` 并行 fan-out 四路（Dense/Lexical/Structure/Graph），按 route 索引确定性 merge fusion trace；wall-clock 从 Σtimes 降到 max(times)，典型 4× 改善。无新增依赖（仍 stdlib-only）。下方原文不动以保留方案审计轨迹。
 
 3. **`InMemoryStore.Search` 是 O(N × dim)** 全表扫描（`store/inmemory.go:55-85`）。Reflect.DeepEqual 的 filter 路径每条都跑一次。**优化方向**：
    - 内存里实现一个简单的 IVF / HNSW 索引；
@@ -856,6 +861,8 @@ sequenceDiagram
 5. **Postgres**：
    - `Upsert` 是单 transaction 内逐 row INSERT（`postgres.go:194-214`）。对大批量 import，可以走 `COPY FROM STDIN` 或 `pgx.Batch`，吞吐 5-10x。
    - `Search` 的 `<=> $vec ORDER BY ... LIMIT` 在大表上一定要有 ivfflat / hnsw 索引；`Migrate`（`postgres.go:93-161`）目前没 create vector index，**这是生产部署最大的 footgun**。建议增加 `Migrate` 选项 `Config.WithVectorIndex VectorIndexType`。
+
+   > **状态（2026-05-23）：已 shipped in rag v1.0.5 (P1-1)**。`postgres.Config` 新增 `VectorIndex VectorIndex`（enum: `VectorIndexNone` / `VectorIndexIVFFlat` / `VectorIndexHNSW`）+ `IVFFlatLists` / `HNSWConstructionM` 等字段；`Migrate` 在选中时 `CREATE INDEX IF NOT EXISTS ... USING ivfflat (embedding vector_cosine_ops)` / `USING hnsw (...)`。默认 zero-value = `VectorIndexNone` 保持向后兼容。预计 100K-chunk 表 NN 查询从 ~1.5s 降到 ~80ms (~19×)。下方原文不动以保留方案审计轨迹。
 
 6. **OnImport / OnRetrieve / OnAsk Observer 是同步调用**。`rag/import.go:175-187` 直接 `s.observer.OnImport(ctx, trace)`，回调慢就 block 整个 Import 返回。生产应该用 channel + goroutine pool 异步派发——但这超出 SDK 责任，应留给 wrapper（如 `llm-agent-otel`）实现。
 
@@ -934,9 +941,9 @@ sequenceDiagram
 
 ### 9.2 我额外建议的方向
 
-5. **批量 Embedding seam**：新增 `BatchEmbedder` optional capability（不破坏 v1）。
-6. **Concurrent HybridRetriever**：四路并发跑（stdlib `sync.WaitGroup`）。
-7. **Postgres vector index** in `Migrate`：让 `Config` 暴露 `ivfflat lists` / `hnsw m, ef_construction`，默认开 ivfflat 100。
+5. ~~**批量 Embedding seam**~~：~~新增 `BatchEmbedder` optional capability（不破坏 v1）。~~ **已 ship in v1.0.3 (P1-16, 2026-05-23)**。
+6. ~~**Concurrent HybridRetriever**~~：~~四路并发跑（stdlib `sync.WaitGroup`）。~~ **已 ship in v1.0.4 (P1-15, 2026-05-23)**，4× wall-clock 改善。
+7. ~~**Postgres vector index** in `Migrate`~~：~~让 `Config` 暴露 `ivfflat lists` / `hnsw m, ef_construction`，默认开 ivfflat 100。~~ **已 ship in v1.0.5 (P1-1, 2026-05-23)**：`Config.VectorIndex` 枚举 opt-in（默认 None 向后兼容），支持 IVFFlat 与 HNSW。
 8. **Stream answer**：`generate.Model` 当前只 unary。考虑加 `StreamingModel` capability（`Stream(ctx, req) (<-chan Chunk, error)`）。SSE 已成标配。
 9. **Hierarchical hierarchy compression**：把 community level 0-N 的 selection 从 "always coarsest" 升级成 query-adaptive。
 10. **/v2 模块路径**：当真要做 break 改造（比如把 `SearchOptions` 拆 sub-struct），按 Go module rule 走 `github.com/costa92/llm-agent-rag/v2` 路径，保留 v1 长期接收 patch。`docs/compatibility.md` 已经写明流程。
@@ -1047,4 +1054,4 @@ eval.ErrJudgeModelRequired
 
 ---
 
-*文档基于 v1.0.1 (2026-05-20) tag 写就。后续 v1.x 维护版本若新增 exported symbol，本文档应在"3.2 子包职责"与"6. exported 符号清单"两处补 additive 条目。*
+*文档基于 v1.0.1 (2026-05-20) tag 写就；v1.3 perf-wave (v1.0.3 / v1.0.4 / v1.0.5, 2026-05-23) 闭合状态以"状态"块标注在 §8.2 与 §9.1。后续 v1.x 维护版本若新增 exported symbol，本文档应在"3.2 子包职责"与"6. exported 符号清单"两处补 additive 条目。*

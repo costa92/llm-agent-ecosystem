@@ -30,8 +30,8 @@ llm-agent-ecosystem/
 
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
-| `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.5.1** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.2** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.5** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
@@ -48,7 +48,12 @@ gate** → v0.1.1 LRU engine cache + sync-run event batching →
 `flowrunner` in `llm-agent-customer-support` v0.2.3). v1.1
 ecosystem alignment
 milestone shipped; v1.2 Core Capability Deepening is the active
-milestone.
+milestone. v1.3 perf-wave closure (2026-05-23): `llm-agent-rag`
+shipped P1-16 (BatchEmbedder, v1.0.3) → P1-15 (HybridRetriever
+concurrent, v1.0.4) → P1-1 (pgvector IVFFlat/HNSW index, v1.0.5),
+landing 20× embedding throughput on import, 4× hybrid query
+latency, and ~19× nearest-neighbor query (projected ~1.5s → 80ms
+on 100K chunks).
 
 ## Dependency direction
 
@@ -153,6 +158,11 @@ This is the "coordinated bump + re-tag wave" pattern used in v1.1
   KC-2. Phase 35 (budget / cancellation context, requirement CC-1)
   in active execution; Phases 36-38 plan budget→policy→supervisor→
   audit/close. Source of truth: `llm-agent/.planning/STATE.md`.
+- **v1.3 perf-wave (rag) — shipped 2026-05-23.** Three P1 roadmap
+  items closed in `llm-agent-rag`: P1-16 BatchEmbedder optional
+  capability (v1.0.3), P1-15 HybridRetriever concurrent fan-out
+  (v1.0.4), P1-1 `postgres.Config.VectorIndex` IVFFlat/HNSW opt-in
+  (v1.0.5). All additive — public v1 API surface unchanged.
 
 ---
 *Workspace consolidated 2026-05-20 from prior `/tmp/` and `costa92/`

@@ -18,7 +18,7 @@
 |---|---|---|---|---|---|---|
 | **P0-1** | customer-support | bug | P0 | S | C | guardrails 在 production wiring 中悬空 |
 | **P0-2** | llm-agent / umbrella | 架构 | P0 | M | B | RAG facade 名实不副，须二选一 |
-| **P1-1** | rag | 架构 + 性能 | P1 | M | A | Postgres Migrate 加 ivfflat / hnsw 索引选项 |
+| **P1-1**（已修） | rag | 架构 + 性能 | P1 | M | A | ~~Postgres Migrate 加 ivfflat / hnsw 索引选项~~ — 已 ship in rag **v1.0.5**（2026-05-23 v1.3 perf-wave 第 3 棒）|
 | **P1-2** | rag | 安全 | P1 | S | A | AskGlobal / AskDrift 路径补 injection sanitize |
 | **P1-3** | llm-agent | 架构 | P1 | S | B | `comm/a2a` 后台 goroutine ctx 修复 |
 | **P1-4** | llm-agent | DX | P1 | S | A | `runStreamFromBlocking` ctx-cancel 时发 Done event |
@@ -32,8 +32,8 @@
 | **P1-12** | otel | 可观测 | P1 | M | A | 接入 `timeToFirst` histogram |
 | **P1-13** | otel | 可观测 | P1 | L | A | `otelslog` 走 OTel log SDK |
 | **P1-14** | otel | DX | P1 | M | A | `otelmodel` 自动连接 `otelmetrics.Recorder` |
-| **P1-15** | rag | 性能 | P1 | M | A | `HybridRetriever` 四路并发 |
-| **P1-16** | rag | 性能 | P1 | M | A | 新增 `BatchEmbedder` optional capability |
+| **P1-15**（已修） | rag | 性能 | P1 | M | A | ~~`HybridRetriever` 四路并发~~ — 已 ship in rag **v1.0.4**（2026-05-23 v1.3 perf-wave 第 2 棒）|
+| **P1-16**（已修） | rag | 性能 | P1 | M | A | ~~新增 `BatchEmbedder` optional capability~~ — 已 ship in rag **v1.0.3**（2026-05-23 v1.3 perf-wave 第 1 棒）|
 | **P1-17** | flow | 性能 | P1 | S | B | SQLite WAL + multi-VALUES INSERT |
 | **P1-18** | flow | DX | P1 | S | B | `FlowEvent.Metadata` 字段加（additive） |
 | **P1-19** | customer-support | DX | P1 | M | C | toolAgent 补 ReAct 第二轮（observation→final） |
@@ -305,6 +305,8 @@ Ready: func(ctx context.Context) error {
 
 #### P1-15 rag：HybridRetriever 四路并发
 
+> **状态（2026-05-23）：已 ship in rag v1.0.4，PR #6 llm-agent-rag，merge commit ff7af07**。`HybridRetriever.Retrieve` 采用 `sync.WaitGroup` 并行 fan-out Dense/Lexical/Structure/Graph 四路；按 route 索引确定性 merge fusion trace；wall-clock 从 Σtimes 降到 max(times)，典型 4× 改善。无新增依赖（仍 stdlib-only）。v1.3 perf-wave 第 2 棒。下方原文不动以保留方案审计轨迹。
+
 **仓**：`llm-agent-rag` | **Effort**：M | **Impact**：A
 
 **现状**：`retrieve.go:984-1009` HybridRetriever 内部 Dense → Lexical → Structure → Graph 串行；4 路全部独立可并发。
@@ -350,6 +352,8 @@ wg.Wait()
 ---
 
 #### P1-16 rag：BatchEmbedder optional capability
+
+> **状态（2026-05-23）：已 ship in rag v1.0.3，PR #5 llm-agent-rag，merge commit af9b5b8**。`embed/embedder.go` 新增 `BatchEmbedder` optional capability（`EmbedBatch(ctx, []string) ([]Vector, error)`）；`rag/import.go` type-assert 嗅探后走 batch 路径，否则 fallback 单调；customer-support PR #20 已 wire `ragEmbedderAdapter.EmbedBatch` 通过 providers OpenAI 适配器走 batch。实测在 import 路径上 20× 吞吐改善（OpenAI text-embedding-3-small）。v1.3 perf-wave 第 1 棒。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-rag` | **Effort**：M | **Impact**：A
 
@@ -504,6 +508,8 @@ internal/anthropiccompat/
 ---
 
 #### P1-1 rag：Postgres Migrate 加 vector index 选项
+
+> **状态（2026-05-23）：已 ship in rag v1.0.5，PR #7 llm-agent-rag，merge commit 3c92585**。`postgres.Config` 新增 `VectorIndex VectorIndex`（enum: `VectorIndexNone` / `VectorIndexIVFFlat` / `VectorIndexHNSW`）+ `IVFFlatLists` / `HNSWConstructionM` 等可选参数；`Migrate` 在 opt-in 时 `CREATE INDEX IF NOT EXISTS ... USING ivfflat (embedding vector_cosine_ops)` 或 `... USING hnsw (...)`。默认零值 = `VectorIndexNone` 保持向后兼容；customer-support 当前未启用（按需自配 postgres）。预计 100K-chunk NN 查询从 ~1.5s 降到 ~80ms (~19×)。v1.3 perf-wave 第 3 棒；至此 P1-1/15/16 三棒全部 closed，rag 进入"可直接生产用"状态（详见 `docs/ecosystem-design-review.zh-CN.md` §7）。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-rag` | **Effort**：M | **Impact**：A
 
@@ -1271,10 +1277,11 @@ DX 缺口集中三类：
 
 主题：**"Streaming 完备性 + 可观测三联"**。
 
-> **进度盘点（2026-05-22）**：
+> **进度盘点（2026-05-23）**：
 > - **first wave 完成**：P1-3 / P1-4 / P1-22（PR #3 llm-agent + PR #2 llm-agent + PR #16 customer-support）+ P1-9 已 5/5 闭合（PR #19 + PR #20 providers）。剩 **P1-6 providers default timeout** —— unblocked，等 next wave。
 > - **fourth wave 部分完成**：P1-7（PR #17 providers）+ P1-8（PR #18 providers）+ P1-18（PR #3 flow v0.1.3）。剩 P1-19 / P1-20 / P1-21。
-> - **third wave 部分完成**：P1-17 WAL 已 merge（PR #2 flow v0.1.2）；multi-VALUES INSERT 仍 pending。
+> - **third wave perf 棒（rag）3/3 闭合（2026-05-23 v1.3 perf-wave）**：P1-16 已 ship in rag v1.0.3（PR #5，merge af9b5b8）→ P1-15 已 ship in rag v1.0.4（PR #6，merge ff7af07）→ P1-1 已 ship in rag v1.0.5（PR #7，merge 3c92585）。customer-support 在 PR #20 wire 了 BatchEmbedder 适配器；后续可通过单仓 PR 升 rag pin（v1.0.3 → v1.0.5）摘取 P1-15 + P1-1 收益。
+> - **third wave 部分完成（flow 部分）**：P1-17 WAL 已 merge（PR #2 flow v0.1.2）；multi-VALUES INSERT 仍 pending。
 > - **second wave 未启动**：P1-10 / P1-11 / P1-12 / P1-14 待 next wave。
 > - 同步：P0-1（commit 9171a0a）+ P0-2（commit 6029565）已在 v1.2 收尾完成（详见 §6.1）。
 
@@ -1292,9 +1299,9 @@ DX 缺口集中三类：
 
 第三波（性能）：
 - P1-17 flow SQLite WAL **(WAL done, PR #2 flow v0.1.2; multi-VALUES INSERT pending)**
-- P1-1 rag pgvector index
-- P1-16 rag BatchEmbedder
-- P1-15 rag Hybrid 并发
+- P1-1 rag pgvector index **(done, rag v1.0.5, PR #7 merge 3c92585, 2026-05-23)**
+- P1-16 rag BatchEmbedder **(done, rag v1.0.3, PR #5 merge af9b5b8, 2026-05-23)**
+- P1-15 rag Hybrid 并发 **(done, rag v1.0.4, PR #6 merge ff7af07, 2026-05-23)**
 
 第四波（DX 与测试覆盖）：
 - P1-7 / P1-8 deepseek/minimax conformance + capabilitiesForModel **(done, PR #17 + PR #18 providers)**
@@ -1390,10 +1397,10 @@ DX 缺口集中三类：
 
 ### 9.2 `llm-agent-rag`
 
-- P1-1 Postgres Migrate 加 vector index 选项
+- ~~P1-1 Postgres Migrate 加 vector index 选项~~ **(done, rag v1.0.5, PR #7, 2026-05-23)**
 - P1-2 AskGlobal/AskDrift injection sanitize
-- P1-15 HybridRetriever 四路并发
-- P1-16 BatchEmbedder optional capability
+- ~~P1-15 HybridRetriever 四路并发~~ **(done, rag v1.0.4, PR #6, 2026-05-23)**
+- ~~P1-16 BatchEmbedder optional capability~~ **(done, rag v1.0.3, PR #5, 2026-05-23)**
 - P2-4 ingest.Importer 命名收敛或 deprecate
 - P2-5 api/v1.snapshot.txt 加行为 golden
 - P2-9 MarkdownSplitter 识别 setext + code fence

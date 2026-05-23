@@ -50,7 +50,7 @@
 
 1. **核心 `llm-agent` 的 stdlib-only 价值**依赖"独立可读、独立审查"。把它放进 monorepo 后，下游 transitive deps 会自动出现在它的 `go.sum` 里（`go list -deps ./...` 会把整图拉满），破坏 *"读得完每一行"* 这个最大卖点（`source-design-llm-agent.zh-CN.md` §2 DP-1）。
 2. **`llm-agent-rag` 是 fixed point**，v1.x API additive-only（`source-design-llm-agent-rag.zh-CN.md` §1.3）。它需要**独立**的 tag 流和 issue tracker，让兄弟仓库"向它对齐"而不是"和它一起 bump"。Monorepo 化的代价：每次 rag 的 patch 都得拖动整个 monorepo 的 CI。
-3. **不同 sibling 的演进节奏差异极大**：`llm-agent-flow` 在 ~3 周内从 v0.0.1 → v0.1.1 走了 11 个 phase；同期 `llm-agent` 还在 v0.5.1；`llm-agent-rag` 早已 v1.0.2 冻结。强行同步 release wheel 会让快的等慢的。
+3. **不同 sibling 的演进节奏差异极大**：`llm-agent-flow` 在 ~3 周内从 v0.0.1 → v0.1.1 走了 11 个 phase；同期 `llm-agent` 已到 v0.6.1；`llm-agent-rag` v1.x 锁 API 后仍在打 additive 性能补丁（v1.0.5，2026-05-23 v1.3 perf-wave）。强行同步 release wheel 会让快的等慢的。
 4. **GitHub PR review 模型适合"小仓库精读"**而非"大 monorepo 改 5 个目录的 PR"。每个 sibling repo 是独立 review 单位，CODEOWNERS、issue labels、release notes 都 colocated。
 
 非目标列表是**non-negotiable**：umbrella `README.md:67-89` 把这些规则上升为 keystone-level，由 CI 闸子强制（§6）。
@@ -173,15 +173,22 @@ Makefile 总共 40 行，没有任何 recipe 逻辑 — 所有真实工作在 `s
 
 ```
 CASCADE ORDER (bump leaves first):
-  1. llm-agent-rag                latest:v1.0.2   pins: (no in-ecosystem deps)
-  2. llm-agent                    latest:v0.5.1   pins: llm-agent-rag@v1.0.1
+  1. llm-agent-rag                latest:v1.0.5   pins: (no in-ecosystem deps)
+  2. llm-agent                    latest:v0.6.1   pins: (none — P0-2 dropped rag back-edge)
   3. llm-agent-providers          latest:v0.2.2   pins: llm-agent@v0.5.1
   4. llm-agent-flow               latest:v0.1.1   pins: llm-agent@v0.5.1
   5. llm-agent-otel               latest:v0.2.2   pins: llm-agent@v0.5.1, llm-agent-rag@v1.0.1, llm-agent-flow@v0.0.7
-  6. llm-agent-customer-support   latest:v0.2.3   pins: llm-agent@v0.5.1, llm-agent-otel@v0.2.2, llm-agent-providers@v0.2.2, llm-agent-flow@v0.0.7
+  6. llm-agent-customer-support   latest:v0.2.3   pins: llm-agent@v0.5.1, llm-agent-otel@v0.2.2, llm-agent-providers@v0.2.2, llm-agent-flow@v0.0.7, llm-agent-rag@v1.0.3
 
-STALE PINS:
+STALE PINS (2026-05-23 snapshot, v1.3 perf-wave 闭合后):
+  - llm-agent-providers pins llm-agent@v0.5.1 (latest v0.6.1)
+  - llm-agent-flow pins llm-agent@v0.5.1 (latest v0.6.1)
+  - llm-agent-otel pins llm-agent@v0.5.1 (latest v0.6.1)
+  - llm-agent-otel pins llm-agent-rag@v1.0.1 (latest v1.0.5)
   - llm-agent-otel pins llm-agent-flow@v0.0.7 (latest v0.1.1)
+  - llm-agent-customer-support pins llm-agent@v0.5.1 (latest v0.6.1)
+  - llm-agent-customer-support pins llm-agent-rag@v1.0.3 (latest v1.0.5)
+  - llm-agent-customer-support pins llm-agent-flow@v0.0.7 (latest v0.1.1)
 ```
 
 `STALE` 行触发 `os.Exit(1)`（`main.go:434-436`），所以 `depcheck` 本身可以做硬门 — 但 umbrella CI **故意只用 informational 模式**（`umbrella.yml:113-114` `|| true`），让运维通过 artifact 看到 stale 而不阻塞 PR。
@@ -191,9 +198,9 @@ STALE PINS:
 `depcheck` 的 `topoSort`（`main.go:184-252`）是修改版 Kahn 算法：
 
 - 正常情况下按入度 0 → emit → 减少依赖者入度。
-- **back-edge 处理**：当 `llm-agent` ↔ `llm-agent-rag` 形成循环（rag facade 反向边），算法不报死循环而是**选 cycle 中 out-degree 最小的节点先 emit**，alphabetical tie-break（`main.go:226-244`）。结果：`llm-agent-rag` 先 emit（它 out-degree=0，是真叶子），`llm-agent` 后 emit（它 out-degree=1 含 rag 反向边）。
+- **back-edge 处理**：算法对 cycle 不报死循环而是**选 cycle 中 out-degree 最小的节点先 emit**，alphabetical tie-break（`main.go:226-244`）。**当前态（2026-05-23）**：P0-2 已删 `llm-agent` → `llm-agent-rag` 反向边，cycle 路径不再触发；但算法仍保留兜底能力以容忍未来其他合法 back-edge 场景。
 
-这个 graceful 处理符合"K2 back-edge 仅用于 RAG facade"的设计意图 — 工具不会因为合法的 facade 反向边而失效。
+历史背景：v1.1 时期允许 `llm-agent → llm-agent-rag` 作为 facade 反向边；P0-2（2026-05-22，commit 6029565）采纳 drop-dependency 路径将其撤销，核心 `llm-agent` 现严格 stdlib-only。
 
 ### 4.4 调用约定
 
@@ -304,7 +311,7 @@ GOWORK=off go run . || true
 
 脚本（`scripts/stdlib-only-check.sh:38-167`）三项断言：
 
-1. **Assertion 1**（`stdlib-only-check.sh:41-91`）：`llm-agent/go.mod` 的 direct require block 必须**恰好 1 条**且形如 `github.com/costa92/llm-agent-rag v1.0.x`。
+1. **Assertion 1**（`stdlib-only-check.sh:41-91`）：`llm-agent/go.mod` 的 direct require block 必须**恰好 0 条**（P0-2 已删 RAG 反向边；脚本 message: `expected ZERO direct requires in core go.mod`）。
 2. **Assertion 2**（`stdlib-only-check.sh:94-132`）：`cd llm-agent && GOWORK=off go list -deps ./...` 输出里只能包含：
    - stdlib 路径（无 `.` 字符，如 `context`、`encoding/json`）；
    - `vendor/` 前缀（stdlib 内部 vendoring）；
@@ -313,7 +320,7 @@ GOWORK=off go run . || true
    - `golang.org/x/...`（rag 的 transitive 允许）。
 
    其他任何条目都视为 leak。
-3. **Assertion 3**（`stdlib-only-check.sh:135-166`）：`policy/` / `budget/` / `agentstest/` 三个 sub-package 必须**完全 zero external dep** — 连 `llm-agent-rag` back-edge 也不允许拉。这是因为这三个 sub-package 设计上要可被任何上游单独引入（DP-1 的极致）。
+3. **Assertion 3**（`stdlib-only-check.sh:135-166`）：`policy/` / `budget/` / `agentstest/` 三个 sub-package 必须**完全 zero external dep**。这是因为这三个 sub-package 设计上要可被任何上游单独引入（DP-1 的极致）。P0-2 之后整个 `llm-agent` 都已严格 stdlib-only，该断言现在与 Assertion 1+2 重叠，但保留作 sub-package 级别的精细兜底。
 
 ### 6.5 子仓自己的 CI vs umbrella CI
 
@@ -411,7 +418,7 @@ v1.1 milestone（2026-05-20 关闭）的 Phase 33 "coordinated bump + re-tag wav
      f. git tag v<new>; git push --tags
 
 3. umbrella commit: 更新 README.md 的 roster table 中 tag 列
-   $ vim README.md  # 改 v1.0.2 → v1.0.3 等
+   $ vim README.md  # 改对应 sibling 的 **vX.Y.Z** 到 latest
    $ git commit -am "docs(roster): bump after <cascade name>"
 
 4. 触发 umbrella CI 跑 cross-repo-build + B2/B3/B4 验证整链一致
@@ -463,7 +470,8 @@ umbrella 没有"统一发版"概念 — 每个 sibling 各自打 tag。Phase 33 
 
 按 `README.md:138-152`：
 
-- **v1.0** — `llm-agent-rag` API stabilization — **shipped** 2026-05-21。
+- **v1.0** — `llm-agent-rag` API stabilization — **shipped** 2026-05-21（v1.0.0 surface freeze + apisnapshot baseline）。
+- **v1.3 perf-wave (rag)** — **shipped** 2026-05-23：P1-16 BatchEmbedder (v1.0.3) → P1-15 HybridRetriever 并发 (v1.0.4) → P1-1 pgvector index opt-in (v1.0.5)。三条都是 additive，v1 surface 不变。
 - **v1.1** — Ecosystem alignment — **shipped** 2026-05-20。审计 PASS 5/5（`llm-agent/.planning/v1.1-MILESTONE-AUDIT.md`）。
 - **v1.2** — Core Capability Deepening — **in flight**。主线是 `budget` / `policy` / `orchestrate.Supervisor` 三大核心能力。Phase 35 (budget/cancellation, CC-1) 在执行；Phases 36-38 计划 policy → supervisor → audit/close。
 
