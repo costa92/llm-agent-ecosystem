@@ -50,7 +50,7 @@
 
 1. **核心 `llm-agent` 的 stdlib-only 价值**依赖"独立可读、独立审查"。把它放进 monorepo 后，下游 transitive deps 会自动出现在它的 `go.sum` 里（`go list -deps ./...` 会把整图拉满），破坏 *"读得完每一行"* 这个最大卖点（`source-design-llm-agent.zh-CN.md` §2 DP-1）。
 2. **`llm-agent-rag` 是 fixed point**，v1.x API additive-only（`source-design-llm-agent-rag.zh-CN.md` §1.3）。它需要**独立**的 tag 流和 issue tracker，让兄弟仓库"向它对齐"而不是"和它一起 bump"。Monorepo 化的代价：每次 rag 的 patch 都得拖动整个 monorepo 的 CI。
-3. **不同 sibling 的演进节奏差异极大**：`llm-agent-flow` 在 ~3 周内从 v0.0.1 → v0.1.1 走了 11 个 phase；同期 `llm-agent` 已到 v0.6.1；`llm-agent-rag` v1.x 锁 API 后仍在打 additive 性能补丁（v1.0.5，2026-05-23 v1.3 perf-wave）。强行同步 release wheel 会让快的等慢的。
+3. **不同 sibling 的演进节奏差异极大**：`llm-agent-flow` 在 ~3 周内从 v0.0.1 → v0.1.4 走了 11 个 phase + D3 MetadataAwareTool additive；同期 `llm-agent` 已到 v0.6.1；`llm-agent-rag` v1.x 锁 API 后仍在打 additive 性能补丁（v1.0.5，2026-05-23 v1.3 perf-wave）；`llm-agent-providers` 同日 ship v0.2.4 落地 `internal/compat`（P1-23 + P1-6 同步闭合）。强行同步 release wheel 会让快的等慢的。
 4. **GitHub PR review 模型适合"小仓库精读"**而非"大 monorepo 改 5 个目录的 PR"。每个 sibling repo 是独立 review 单位，CODEOWNERS、issue labels、release notes 都 colocated。
 
 非目标列表是**non-negotiable**：umbrella `README.md:67-89` 把这些规则上升为 keystone-level，由 CI 闸子强制（§6）。
@@ -175,21 +175,23 @@ Makefile 总共 40 行，没有任何 recipe 逻辑 — 所有真实工作在 `s
 CASCADE ORDER (bump leaves first):
   1. llm-agent-rag                latest:v1.0.5   pins: (no in-ecosystem deps)
   2. llm-agent                    latest:v0.6.1   pins: (none — P0-2 dropped rag back-edge)
-  3. llm-agent-providers          latest:v0.2.2   pins: llm-agent@v0.5.1
-  4. llm-agent-flow               latest:v0.1.1   pins: llm-agent@v0.5.1
+  3. llm-agent-providers          latest:v0.2.4   pins: llm-agent@v0.5.1
+  4. llm-agent-flow               latest:v0.1.4   pins: llm-agent@v0.5.1
   5. llm-agent-otel               latest:v0.2.2   pins: llm-agent@v0.5.1, llm-agent-rag@v1.0.1, llm-agent-flow@v0.0.7
-  6. llm-agent-customer-support   latest:v0.2.3   pins: llm-agent@v0.5.1, llm-agent-otel@v0.2.2, llm-agent-providers@v0.2.2, llm-agent-flow@v0.0.7, llm-agent-rag@v1.0.3
+  6. llm-agent-customer-support   latest:v0.2.3   pins: llm-agent@v0.5.1, llm-agent-otel@v0.2.2, llm-agent-providers@v0.2.2, llm-agent-flow@v0.0.7, llm-agent-rag@v1.0.5
 
-STALE PINS (2026-05-23 snapshot, v1.3 perf-wave 闭合后):
+STALE PINS (2026-05-23 EOD snapshot, v1.3 milestone 闭合后):
   - llm-agent-providers pins llm-agent@v0.5.1 (latest v0.6.1)
   - llm-agent-flow pins llm-agent@v0.5.1 (latest v0.6.1)
   - llm-agent-otel pins llm-agent@v0.5.1 (latest v0.6.1)
   - llm-agent-otel pins llm-agent-rag@v1.0.1 (latest v1.0.5)
-  - llm-agent-otel pins llm-agent-flow@v0.0.7 (latest v0.1.1)
+  - llm-agent-otel pins llm-agent-flow@v0.0.7 (latest v0.1.4)
   - llm-agent-customer-support pins llm-agent@v0.5.1 (latest v0.6.1)
-  - llm-agent-customer-support pins llm-agent-rag@v1.0.3 (latest v1.0.5)
-  - llm-agent-customer-support pins llm-agent-flow@v0.0.7 (latest v0.1.1)
+  - llm-agent-customer-support pins llm-agent-providers@v0.2.2 (latest v0.2.4)
+  - llm-agent-customer-support pins llm-agent-flow@v0.0.7 (latest v0.1.4)
 ```
+
+> 注：customer-support 已通过 PR #21（commit 85b7ad7）将 `llm-agent-rag` pin 从 v1.0.3 升到 v1.0.5；`rag` 行已从 STALE 摘除。providers / flow 的新 tag（v0.2.4 / v0.1.4）让 customer-support 的对应 pin 进入新一轮 STALE。v1.4 cascade 将在该窗口启动。
 
 `STALE` 行触发 `os.Exit(1)`（`main.go:434-436`），所以 `depcheck` 本身可以做硬门 — 但 umbrella CI **故意只用 informational 模式**（`umbrella.yml:113-114` `|| true`），让运维通过 artifact 看到 stale 而不阻塞 PR。
 
