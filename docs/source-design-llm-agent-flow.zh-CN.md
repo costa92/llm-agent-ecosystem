@@ -1,7 +1,8 @@
 # llm-agent-flow 子项目源码级设计文档
 
 > 仓库路径：`llm-agent-flow/`
-> 版本范围：v0.0.1（walking skeleton，Phase 1）→ v0.0.9（Phase 9 replay）→ v0.1.0（Phase 10 SemVer 冻结）→ v0.1.1（Phase 11 LRU + 批量持久化）
+> 版本范围：v0.0.1（walking skeleton，Phase 1）→ v0.0.9（Phase 9 replay）→ v0.1.0（Phase 10 SemVer 冻结）→ v0.1.1（Phase 11 LRU + 批量持久化）→ v0.1.3（FlowEvent.Metadata，P1-18）→ **v0.1.4**（D3 MetadataAwareTool — `toolNode` 实现 `MetadataAware`，built-in `http` / `exec` 工具实现 `MetadataAwareTool` optional sibling capability）
+> 当前 tag：**v0.1.4**（2026-05-23 v1.3 milestone 闭合）。
 > 代码量：57 个 .go 文件 ≈ 7468 行（含测试），核心 `flow` 包仅 ≈ 1700 行
 > 依赖姿态：核心 `flow` 包 stdlib-only（仅经由 back-edge 引用 `github.com/costa92/llm-agent` 的 `Tool`/`pkg/fanout`），CEL、SQLite、cel-go、modernc.org/sqlite 都是子包按需引入
 
@@ -77,12 +78,14 @@ llm-agent-flow/
 | v0.0.9 | 9     | `POST /runs/{id}/replay`（重放持久化事件）                    |
 | v0.1.0 | 10    | **SemVer 冻结** + `internal/apisnapshot` 守卫 + `api/v0.1.snapshot.txt` 基线 |
 | v0.1.1 | 11    | 性能优化：引擎 LRU 缓存 + 同步 Run 事件批量持久化            |
+| v0.1.3 | —     | `FlowEvent.Metadata` 字段加（additive，P1-18，PR #3 flow）   |
+| v0.1.4 | —     | D3：`MetadataAware` `toolNode` 实现 + `MetadataAwareTool` optional sibling capability，built-in `http` / `exec` 工具落地（PR #8 flow，2026-05-23）|
 
 ### 1.4 当前导出符号边界
 
 `api/v0.1.snapshot.txt`（v0.1.1 基线）共 **9 个包**、约 90+ 个导出符号。关键边界：
 
-- `flow` 包（v0.1 主表面）：`Flow / Node / Edge / Port / PortRef / NamedPortRef / FlowEvent / FlowEventKind`、`Engine / Compile / LoadCompile / WithMaxNodeConcurrency / WithConditionEvaluator`、`Runner / NodeKind / NodeFactory / NodeRegistry`、`Tool / ToolLookup / ToolMap`、`Condition / ConditionEvaluator / CondEnv`、`Validate / ValidateError / ErrEmptyFlow`、`RegisterToolNode / TypeTool`、`FromAgentTool / FromAgentTools`。
+- `flow` 包（v0.1 主表面）：`Flow / Node / Edge / Port / PortRef / NamedPortRef / FlowEvent / FlowEventKind`、`Engine / Compile / LoadCompile / WithMaxNodeConcurrency / WithConditionEvaluator`、`Runner / NodeKind / NodeFactory / NodeRegistry`、`MetadataAware`（v0.1.3 additive optional sibling capability，与 `NodeKind` 并列）、`Tool / ToolLookup / ToolMap`、`MetadataAwareTool`（v0.1.4 additive optional sibling capability，与 `Tool` 并列；`toolNode` 编译期 pin 实现 `MetadataAware`，运行时 type-assert 嗅探 `MetadataAwareTool` 取 meta）、`Condition / ConditionEvaluator / CondEnv`、`Validate / ValidateError / ErrEmptyFlow`、`RegisterToolNode / TypeTool`、`FromAgentTool / FromAgentTools`。
 - `flow/store`：`Store` 接口（11 个方法）+ `FlowMeta / FlowRecord / RunMeta / RunRecord / RunEvent / RunEventBatchItem`（v0.1.1 新增）+ `ErrNotFound / ErrAlreadyExists`。
 - `flow/store/sqlite`：`Store` 结构 + `Open(dsn)` + 13 个方法（含 v0.1.1 `AppendRunEvents`，按 type-assert 暴露为可选能力，不污染接口）。
 - `flow/cond/cel`：`Evaluator + NewEvaluator + MustNewEvaluator + Compile`。
