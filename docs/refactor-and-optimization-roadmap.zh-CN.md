@@ -40,7 +40,7 @@
 | **P1-20** | customer-support | 性能 | P1 | S | C | session 历史 tail-N 截断 |
 | **P1-21** | customer-support | DX | P1 | M | C | flowrunner 接入 production handler |
 | **P1-22** | customer-support | 安全 | P1 | S | C | `/readyz` 真正 ping db/model |
-| **P1-23** | providers | 架构 | P1 | L | A | 抽 `internal/openaicompat` / `anthropiccompat` |
+| **P1-23**（已修） | providers | 架构 | P1 | L | A | ~~抽 `internal/openaicompat` / `anthropiccompat`~~ — 已 ship in providers **v0.2.4**（2026-05-23 v1.3 milestone 闭合，PR #28 / #29 / #30），落地 `internal/compat` 共享 `DefaultTimeout` + `WrapOpenAIError` + `WrapAnthropicError`（5/5 共享 timeout、4/5 共享 error 映射；ollama 保留 atomic-state 模式）|
 | **P2-1** | llm-agent | DX | P2 | M | A | 加 `Message.ToolCallID` 字段 + 多轮 FunctionCallAgent |
 | **P2-2** | llm-agent | 架构 | P2 | S | C | `memory.Consolidate` 衰减源项 Importance |
 | **P2-3** | llm-agent | 可观测 | P2 | S | C | `policy.BlockedError.Wrapped` 标准化承接 budget err |
@@ -469,7 +469,7 @@ if be, ok := s.embedder.(embed.BatchEmbedder); ok {
 
 #### P1-23 providers：抽 `internal/openaicompat` / `anthropiccompat`
 
-> **状态（2026-05-22）：定为 v1.4 路线**。P1-7/P1-8/P1-9 已在 v1.3 first/second wave 内单独打补丁完成（不阻塞 P1-6 default timeout）；compat 抽象的成本/收益判断推迟到 v1.4 窗口再统一评估（届时 P1-6 timeout 默认值也会一并放进 compat 包）。下方原文不动以保留方案审计轨迹。
+> **状态（2026-05-23）：已 ship in providers v0.2.4，v1.3 milestone 闭合**。3 个 PR 渐次合并（PR #28 openai+deepseek、PR #29 anthropic+minimax、PR #30 ollama）落地 `internal/compat` 内部包，导出 `DefaultTimeout`（5/5 provider 共享）+ `WrapOpenAIError`（openai / deepseek 共享）+ `WrapAnthropicError`（anthropic / minimax 共享）。**ollama `errors.go` 保留 atomic-state pattern**（Path A 取舍：streaming response 状态机与 OpenAI / Anthropic 同形难以零成本对齐），仅借用 `compat.DefaultTimeout`；同理 streaming reader 抽取留待 v1.4 窗口（详见下文方案，stream.go 部分尚未抽出）。原本路线图设想的"包名 `internal/openaicompat` + `internal/anthropiccompat`"演化为单一 `internal/compat`，因为 timeout 是 5/5 共享、错误映射按 SDK 家族二分即可，过细分包反而增加 import surface。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-providers` | **Effort**：L | **Impact**：A
 
@@ -710,7 +710,7 @@ cd ../llm-agent-customer-support && go build ./...
 
 #### P1-6 providers：5 个 provider 加 default timeout
 
-> **状态（2026-05-22）：unblocked，等 v1.3 next wave 实施**。原本计划在 P1-9 Retry-After 5/5 闭合后才动；现 PR #20 ollama Retry-After 已 merge（commit 537b351），P1-9 已闭合（5/5）。P1-6 可在 next wave 内单仓 PR 完成（不再需要等待 P1-23 compat 抽取，详见 P1-23 v1.4 路线说明）。下方原文不动以保留方案审计轨迹。
+> **状态（2026-05-23）：已 ship in providers v0.2.4 (P1-23 cascade)**。P1-6 在 P1-23 三连 PR 中顺带闭合：`internal/compat/timeout.go::DefaultTimeout` 落地后，openai / anthropic / deepseek / minimax / ollama 5 个 `options.go` 全部统一调用 `cfg.timeout = compat.DefaultTimeout(cfg.timeout)`（默认 60 秒，非零值原样保留）。**P1-6 / P1-23 同步闭合，v1.3 milestone 收尾**。下方原文不动以保留方案审计轨迹。
 
 **仓**：`llm-agent-providers` | **Effort**：S | **Impact**：A
 
@@ -1277,20 +1277,21 @@ DX 缺口集中三类：
 
 主题：**"Streaming 完备性 + 可观测三联"**。
 
-> **进度盘点（2026-05-23）**：
-> - **first wave 完成**：P1-3 / P1-4 / P1-22（PR #3 llm-agent + PR #2 llm-agent + PR #16 customer-support）+ P1-9 已 5/5 闭合（PR #19 + PR #20 providers）。剩 **P1-6 providers default timeout** —— unblocked，等 next wave。
-> - **fourth wave 部分完成**：P1-7（PR #17 providers）+ P1-8（PR #18 providers）+ P1-18（PR #3 flow v0.1.3）。剩 P1-19 / P1-20 / P1-21。
-> - **third wave perf 棒（rag）3/3 闭合（2026-05-23 v1.3 perf-wave）**：P1-16 已 ship in rag v1.0.3（PR #5，merge af9b5b8）→ P1-15 已 ship in rag v1.0.4（PR #6，merge ff7af07）→ P1-1 已 ship in rag v1.0.5（PR #7，merge 3c92585）。customer-support 在 PR #20 wire 了 BatchEmbedder 适配器；后续可通过单仓 PR 升 rag pin（v1.0.3 → v1.0.5）摘取 P1-15 + P1-1 收益。
+> **进度盘点（2026-05-23 EOD — v1.3 milestone closed）**：
+> - **first wave 完成 + P1-6 / P1-23 闭合**：P1-3 / P1-4 / P1-22 + P1-9（5/5 闭合）+ **P1-6 providers default timeout（done, 随 P1-23 三连 PR providers v0.2.4 同步落地）** + **P1-23 internal/compat 抽取（done, PR #28 / #29 / #30 providers v0.2.4 — 5/5 共享 `DefaultTimeout`、4/5 共享 `WrapOpenAIError` / `WrapAnthropicError`；ollama 保留 atomic-state 模式）**。
+> - **fourth wave 部分完成**：P1-7（PR #17 providers）+ P1-8（PR #18 providers）+ P1-18（PR #3 flow v0.1.3）+ **D3 flow MetadataAwareTool（done, flow v0.1.4，PR #8 flow — `toolNode` 实现 `MetadataAware`，built-in `http` / `exec` 工具实现 `MetadataAwareTool` sibling capability）**。剩 P1-19 / P1-20 / P1-21。
+> - **third wave perf 棒（rag）3/3 闭合（2026-05-23 v1.3 perf-wave）**：P1-16 已 ship in rag v1.0.3（PR #5，merge af9b5b8）→ P1-15 已 ship in rag v1.0.4（PR #6，merge ff7af07）→ P1-1 已 ship in rag v1.0.5（PR #7，merge 3c92585）。customer-support 已 repin 到 rag v1.0.5（PR #21 customer-support，commit 85b7ad7）摘取 P1-15 + P1-1 收益；并通过 T5 test-pin SSE cancel 契约（`httpapi` PR commits d4ddf9f / db0174d）。
 > - **third wave 部分完成（flow 部分）**：P1-17 WAL 已 merge（PR #2 flow v0.1.2）；multi-VALUES INSERT 仍 pending。
-> - **second wave 未启动**：P1-10 / P1-11 / P1-12 / P1-14 待 next wave。
+> - **second wave 未启动**：P1-10 / P1-11 / P1-12 / P1-14 待 v1.4 启动。
 > - 同步：P0-1（commit 9171a0a）+ P0-2（commit 6029565）已在 v1.2 收尾完成（详见 §6.1）。
 
 第一波（架构修复）：
 - P1-3 a2a goroutine ctx **(done, PR #3 llm-agent)**
 - P1-4 RunStream ctx-cancel Done **(done, PR #2 llm-agent)**
-- P1-6 providers default timeout
+- P1-6 providers default timeout **(done, providers v0.2.4, 随 P1-23 三连 PR 同步, 2026-05-23)**
 - P1-9 Retry-After 解析（5 个 provider 闭合）**(done, PR #19 + PR #20 providers, 5/5)**
 - P1-22 customer-support readyz 真探测 **(done, PR #16 customer-support)**
+- P1-23 providers internal/compat 抽取 **(done, providers v0.2.4, PR #28 + #29 + #30, 2026-05-23 — 原计划 v1.4，提前落地)**
 
 第二波（可观测）：
 - P1-10 sampler 暴露
@@ -1316,7 +1317,7 @@ DX 缺口集中三类：
 
 - P1-5 context 包改名（breaking，v1.0 前的最后机会）
 - P1-13 otelslog 走 OTel log SDK
-- P1-23 providers internal/openaicompat 抽取
+- ~~P1-23 providers internal/openaicompat 抽取~~ — **已提前 ship in providers v0.2.4**（2026-05-23 v1.3 milestone 闭合）；v1.4 仅剩 streaming reader 抽取（ollama Path B 评估）作为后续 follow-up
 - P2-2 P2-3 P2-4 P2-6 P2-9 P2-10 内部 bug fix
 
 ### 6.4 v2 / v1.x 分叉（可选）
@@ -1407,11 +1408,11 @@ DX 缺口集中三类：
 
 ### 9.3 `llm-agent-providers`
 
-- P1-6 5 个 provider 默认 timeout
-- P1-7 DeepSeek/MiniMax conformance 补齐（cancel + partial-usage）
-- P1-8 DeepSeek/MiniMax 显式 capabilitiesForModel
-- P1-9 anthropic/ollama/minimax 解析 Retry-After
-- P1-23 抽 internal/openaicompat / anthropiccompat
+- ~~P1-6 5 个 provider 默认 timeout~~ **(done, providers v0.2.4, 随 P1-23 三连 PR 同步落地，2026-05-23)**
+- ~~P1-7 DeepSeek/MiniMax conformance 补齐（cancel + partial-usage）~~ **(done, PR #17 providers, 2026-05-22)**
+- ~~P1-8 DeepSeek/MiniMax 显式 capabilitiesForModel~~ **(done, PR #18 providers, 2026-05-22)**
+- ~~P1-9 anthropic/ollama/minimax 解析 Retry-After~~ **(done, PR #19 + PR #20 providers, 2026-05-22)**
+- ~~P1-23 抽 internal/openaicompat / anthropiccompat~~ **(done, providers v0.2.4, PR #28 + #29 + #30 落地 `internal/compat` 单包, 2026-05-23)**
 - 文档：openai/anthropic doc.go 重写 Phase-1 残留
 - 文档：README 版本号过期
 
