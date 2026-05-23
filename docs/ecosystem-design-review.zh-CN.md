@@ -25,6 +25,8 @@
 - 想"装饰器风格"的 OTel 接入 → 直接抄 `llm-agent-otel` 的设计。
 - 想看 customer-support demo → 当结构骨架学，**guardrails wiring bug 必须先修**。
 
+**v1.3 milestone 闭合（2026-05-23 EOD）**：rag perf-wave 三棒（P1-1/15/16 → v1.0.5）+ providers `internal/compat` 抽取（P1-23 + P1-6 → v0.2.4，PR #28/29/30）+ flow `MetadataAwareTool` 兄弟能力（D3 → v0.1.4，PR #8）+ customer-support SSE cancel 契约 test-pin（T5）+ rag v1.0.5 repin。v1.4 路线现仅剩 streaming reader 抽取（providers ollama Path B）+ context 包改名（P1-5）+ otelslog（P1-13）+ P2 内部 bug fix。
+
 ---
 
 ## 1. 生态全景与定位
@@ -42,8 +44,8 @@ flowchart TB
     end
 
     subgraph adapter["适配层"]
-        providers["llm-agent-providers v0.2.2<br/>(36 .go / 6.6K LOC<br/>OpenAI/Anthropic/Ollama/DeepSeek/MiniMax)"]
-        flow["llm-agent-flow v0.1.1<br/>(57 .go / 7.5K LOC)"]
+        providers["llm-agent-providers v0.2.4<br/>(36 .go / 6.6K LOC<br/>+ internal/compat<br/>OpenAI/Anthropic/Ollama/DeepSeek/MiniMax)"]
+        flow["llm-agent-flow v0.1.4<br/>(57 .go / 7.5K LOC<br/>+ MetadataAwareTool)"]
     end
 
     subgraph decorator["装饰器层"]
@@ -75,7 +77,7 @@ flowchart TB
 | **设计连贯性** | 高 | K1（streaming union）/ K2（per-(provider×model) caps）/ K3（OTel decorator）三条 keystone 在所有 6 仓里都能找到对应代码点 |
 | **依赖卫生** | 高（核心）/ 中（providers） | core `go.sum` 只 2 行；providers 5 个 SDK 共用 3 套上游（openai-go 服务 openai+deepseek，anthropic-sdk-go 服务 anthropic+minimax） |
 | **可测试性** | 高 | `ScriptedLLM` 是 4 capability 一等公民、`storetest` 22 subtest、provider fixture 三层金字塔、apisnapshot CI gate |
-| **生产度** | 中→高（状态截至 2026-05-23） | ~~rag 缺生产向量索引~~ → P1-1 已 ship in rag v1.0.5（`Config.VectorIndex` IVFFlat/HNSW opt-in）；providers 5 个仍缺默认 timeout（P1-6 unblocked、等 v1.3 next wave）；customer-support 是显式标注的 demo only |
+| **生产度** | 高（状态截至 2026-05-23 EOD，v1.3 milestone 闭合）| ~~rag 缺生产向量索引~~ → P1-1 已 ship in rag v1.0.5（`Config.VectorIndex` IVFFlat/HNSW opt-in）；~~providers 5 个缺默认 timeout~~ → P1-6 已 ship in providers v0.2.4（`internal/compat.DefaultTimeout`，5/5 wire）；customer-support 是显式标注的 demo only（已 repin rag v1.0.5）|
 | **名实一致** | 高（状态截至 2026-05-22） | 原"rag facade 名实不副"已通过 P0-2 drop-dependency 消除；原"customer-support README ≠ wiring"已通过 P0-1 guardrails 装配修复；仅剩 providers"stdlib-only HTTP"措辞误导 + otelmodel timeToFirst histogram 已建但 wrapper 没接（P1-12 未合）|
 | **演进策略** | 高 | rag v1 frozen + /v2 路径明示；flow apisnapshot + 加法兼容；core 4 个 validated 类型禁改 |
 
@@ -346,7 +348,7 @@ $ ls llm-agent/rag/
 | **P1-20** | customer-support | **session 历史无截断** — 长会话单 prompt 超 `MaxTokensPerRequest` | `supportflow.go:209-226` |
 | **P1-21** | customer-support | **flowrunner 是孤岛** — 测试完备但 production 无任何 handler 调用 | `internal/flowrunner/*` + `cmd/server/main.go` 无引用 |
 | **P1-22**（已修） | customer-support | ~~readiness 永远 200~~ — 已合并（PR #16 customer-support commit fd78a40，状态截至 2026-05-22）：`internal/app/app.go:134` 注入 `makeReadyFunc(sessions, embedder, cfg.ReadinessProbeEmbedder)`，做 db PingContext + 1s embedder probe 双探测。 | `internal/app/app.go:134,234-256` |
-| **P1-23** | llm-agent-providers | **openai↔deepseek + anthropic↔minimax 代码重复 ~90%** — 缺 `internal/openaicompat` / `anthropiccompat` 抽象，stream reader 改一边手工同步另一边 | 5 个 `*/openai.go`、`*/deepseek.go`、`*/anthropic.go`、`*/minimax.go` 镜像 |
+| **P1-23**（已修） | llm-agent-providers | ~~openai↔deepseek + anthropic↔minimax 代码重复 ~90%~~ — 已 ship in providers **v0.2.4**（2026-05-23 v1.3 milestone 闭合，PR #28 + #29 + #30）：`internal/compat` 内部包导出 `DefaultTimeout`（5/5 共享）+ `WrapOpenAIError`（openai/deepseek 共享）+ `WrapAnthropicError`（anthropic/minimax 共享）。**streaming reader 抽取仍 pending**（v1.4 follow-up）；ollama `errors.go` 保留 atomic-state 模式（Path A，跨家族抽取成本不划算）。P1-6 default timeout 同步在 cascade 内闭合。 | `internal/compat/{timeout,errors_openai,errors_anthropic}.go`；5 个 `options.go` 均调 `compat.DefaultTimeout`；4 个 `errors.go` delegate 到 compat |
 
 ### 6.3 P2（长期）
 
@@ -378,8 +380,8 @@ $ ls llm-agent/rag/
 | **`llm-agent-rag`** | A | **可直接 fork production**（当前 v1.0.5，2026-05-23 v1.3 perf-wave 闭合）。fixed-point + api snapshot + 22-subtest store conformance + 双形态 OTel 接缝是工业级设计。**P1-1 / P1-15 / P1-16 均已 ship**（pgvector index opt-in + concurrent HybridRetriever + BatchEmbedder）；剩余仅 P1-2（AskGlobal/AskDrift injection sanitize）即可全面生产用。 |
 | **`llm-agent` 核心** | A- | **架构可直接 fork**。8-wrapper policy 树、Supervisor-on-StateGraph facade、budget chokepoint 是难得克制的设计。需要修 P0-2（rag facade）+ P1-3/4/5（comm/a2a goroutine 泄露、ctx-cancel Done event、context 包名）。 |
 | **`llm-agent-otel`** | A- | **设计可直接抄**。8-wrapper capability 矩阵 + 双闸门 env opt-in + 基数白名单是教科书级。修 P1-10/11/12/13/14（sampler、env 接管、metric 接入）即可生产。 |
-| **`llm-agent-providers`** | B+ | **结构可 fork，需补完备性**。5 个 provider 共享 fixture + 3 层金字塔是好基础；但 90% 重复（P1-23）+ 5 个缺 timeout + deepseek/minimax conformance 不全（P1-7/8/9）。需要先做 `internal/openaicompat` 抽取。 |
-| **`llm-agent-flow`** | B+ | **IR 设计可直接 fork**。Runner 接口 + apisnapshot + CEL 条件边 + replay 端点是有教学价值的组合。需要补 SQLite WAL（P1-17）、FlowEvent.Metadata（P1-18）、JSON Schema 文件（P2-7）。 |
+| **`llm-agent-providers`** | A- | **结构可 fork、运行时已收敛**（当前 v0.2.4，2026-05-23 v1.3 milestone 闭合）。5 个 provider 共享 fixture + 3 层金字塔 + `internal/compat` 共享 `DefaultTimeout` / `WrapOpenAIError` / `WrapAnthropicError`，P1-23 + P1-6 + P1-7/8/9 全部闭合；剩余 follow-up：streaming reader 抽取（v1.4 ollama Path B 评估）。 |
+| **`llm-agent-flow`** | A- | **IR 设计可直接 fork**（当前 v0.1.4，2026-05-23 v1.3 milestone 闭合）。Runner 接口 + apisnapshot + CEL 条件边 + replay 端点 + `FlowEvent.Metadata`（v0.1.3）+ `MetadataAwareTool` optional sibling capability（v0.1.4 D3）是有教学价值的组合。需要补 SQLite multi-VALUES INSERT（P1-17 余项）、JSON Schema 文件（P2-7）。 |
 | **`llm-agent-customer-support`** | B-（demo only） | **当结构骨架学，不能直接生产**。装配链清晰、双阶段 limit guard、session SQLite/PG 双方言可参考；但 P0-1 必须先修；toolAgent 半步 ReAct、readiness 永真等都不可直接上线。 |
 
 ---
@@ -395,8 +397,8 @@ $ ls llm-agent/rag/
 
 ### 8.2 v1.2 → v1.3 中期重构
 
-3. **providers 抽 internal/openaicompat / anthropiccompat**（P1-23）— 防 90% 重复 drift。
-4. **providers 5 个加 default timeout**（P1-6）— 单文件改动，影响巨大。
+3. ~~**providers 抽 internal/openaicompat / anthropiccompat**（P1-23）~~ — **已完成**（providers v0.2.4，2026-05-23 v1.3 milestone 闭合，PR #28 + #29 + #30）：落地 `internal/compat`（单一包，非两个家族包），导出 `DefaultTimeout` + `WrapOpenAIError` + `WrapAnthropicError`；streaming reader 抽取留 v1.4 follow-up。
+4. ~~**providers 5 个加 default timeout**（P1-6）~~ — **已完成**（providers v0.2.4，随 P1-23 三连 PR 同步落地）：5/5 provider `options.go` 调 `compat.DefaultTimeout`。
 5. ~~providers deepseek/minimax 补 K2 capabilitiesForModel + conformance fixture（P1-7/8）~~ — **已完成**（PR #17 + PR #18 providers，状态截至 2026-05-22）。
 6. ~~**rag HybridRetriever 并发化 + BatchEmbedder optional**（P1-15/16）~~ — **已完成**（rag v1.0.4 + v1.0.3，状态截至 2026-05-23 v1.3 perf-wave）。
 7. ~~**rag Postgres Migrate 加 vector index 选项**（P1-1）~~ — **已完成**（rag v1.0.5，状态截至 2026-05-23 v1.3 perf-wave 第 3 棒）。

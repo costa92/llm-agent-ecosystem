@@ -33,9 +33,9 @@ llm-agent-ecosystem/
 | `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
 | `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.5** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
-| `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-providers> |
+| `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
-| `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.1** | `main` | <https://github.com/costa92/llm-agent-flow> |
+| `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.4** | `main` | <https://github.com/costa92/llm-agent-flow> |
 
 Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow`
 introduced 2026-05-21 (v0.0.1 walking skeleton → v0.0.2 per-layer
@@ -53,7 +53,16 @@ shipped P1-16 (BatchEmbedder, v1.0.3) → P1-15 (HybridRetriever
 concurrent, v1.0.4) → P1-1 (pgvector IVFFlat/HNSW index, v1.0.5),
 landing 20× embedding throughput on import, 4× hybrid query
 latency, and ~19× nearest-neighbor query (projected ~1.5s → 80ms
-on 100K chunks).
+on 100K chunks). Later the same day the v1.3 milestone closed
+with `llm-agent-providers` v0.2.4 (P1-23 `internal/compat`
+extraction across 3 PRs — 5/5 providers share `compat.DefaultTimeout`,
+4/5 share `compat.WrapOpenAIError` / `compat.WrapAnthropicError`;
+ollama `errors.go` retains its atomic-state pattern by design),
+`llm-agent-flow` v0.1.4 (D3 — `toolNode` implements `MetadataAware`
+via the new `MetadataAwareTool` optional sibling capability; built-in
+`http` and `exec` tools opt in), and customer-support T5 (SSE cancel
+contract test-pinned in `httpapi`) — plus `customer-support` repinned
+to `llm-agent-rag v1.0.5`.
 
 ## Dependency direction
 

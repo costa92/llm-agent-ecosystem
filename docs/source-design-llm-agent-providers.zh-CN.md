@@ -2,8 +2,9 @@
 
 > 仓库根：`/home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/llm-agent-providers/`
 > 子项目规模：36 个 `.go` 文件、约 6.6K 行代码（其中测试 ~2 890 行）
-> 核心包：`anthropic/`、`openai/`、`ollama/`、`deepseek/`、`minimax/`、`internal/contract/`、`scripts/`
+> 核心包：`anthropic/`、`openai/`、`ollama/`、`deepseek/`、`minimax/`、`internal/contract/`、`internal/compat/`（v0.2.4 新增）、`scripts/`
 > Go 版本：`go 1.26.0`（`llm-agent-providers/go.mod:3`），核心依赖 `github.com/costa92/llm-agent v0.5.1`（`llm-agent-providers/go.mod:7`）
+> 当前 tag：**v0.2.4**（2026-05-23 v1.3 milestone 闭合 — 落地 `internal/compat` 共享 timeout + error 映射，P1-23 + P1-6 同步闭合）。
 > 本文档基于源码逐文件深读后撰写；所有断言均带 `file:line` 引用。
 
 ---
@@ -815,6 +816,8 @@ func TestMain(m *testing.M) {
 
 #### 7.1.1 contract 抽象层次：当前过薄
 
+> **状态（2026-05-23）：部分已落地（P1-23 v0.2.4）**。`internal/compat` 内部包已新增，导出 `DefaultTimeout`（5/5 provider 共享）+ `WrapOpenAIError`（openai + deepseek 共享）+ `WrapAnthropicError`（anthropic + minimax 共享），消除了 `options.go` 与 `errors.go` 的 byte-for-byte 重复。**ollama** 的 `errors.go` 保留 atomic-state pattern 仅借用 `compat.DefaultTimeout`（Path A 取舍）。**streaming reader（`chunkEvents` / `eventToStreamEvents`）抽取仍 pending**：包名最终演化为单一 `internal/compat` 而非两个家族包，因为 timeout 跨 5 家共享而错误映射只需 SDK 家族二分。stream.go 抽取留待 v1.4 窗口。下方原方案不动以保留审计轨迹。
+
 `internal/contract` 只是测试辅助；运行时五个 provider 没有任何共享代码。CONCERNS.md `:104-116` 已点明：openai/deepseek、anthropic/minimax 在源码上分别是 ~90% 重复。Streaming reader 改一边，另一边手工同步——drift 风险高。
 
 **建议**：抽出 `internal/openaicompat` 与 `internal/anthropiccompat` 两个内部包，把 `chunkEvents` / `eventToStreamEvents` 这两块逻辑做成 provider-name 注入参数的可复用 reader：
@@ -854,6 +857,8 @@ type StreamReader struct {
 ### 7.2 性能层
 
 #### 7.2.1 HTTP 连接池与超时
+
+> **状态（2026-05-23）：已落地（P1-6 / P1-23 v0.2.4）**。`internal/compat/timeout.go::DefaultTimeout(d) time.Duration` 已落地（零值返回 60 s，非零原样返回），5/5 `options.go` 统一调用 `cfg.timeout = compat.DefaultTimeout(cfg.timeout)`：`openai/options.go:55` / `anthropic/options.go:55` / `deepseek/options.go:73` / `minimax/options.go:73` / `ollama/options.go:99`。stuck connection → Generate 无限挂起的现实风险已闭合。下方原建议不动以保留审计轨迹。
 
 CONCERNS.md `:86-93` 已指出：所有 provider 的 `New` 都**不设默认 timeout**。如果用户从来不调 `WithTimeout`，stuck connection 会导致 `Generate` 无限挂起。
 

@@ -286,6 +286,9 @@ agent, err := supportflow.New(supportflow.Options{
 | `flow.ToolMap` / `flow.ConditionEvaluator` / `flow.NodeFactory` | `flowrunner/flowrunner.go:19-21, 43-45` | 节点能力注入 |
 
 ### 4.5 `github.com/costa92/llm-agent-rag`
+
+> **rag pin（2026-05-23）**：`go.mod` 已 repin 到 **v1.0.5**（PR #21 customer-support，commit 85b7ad7），覆盖 v1.3 perf-wave 全套：P1-16 BatchEmbedder（v1.0.3）+ P1-15 concurrent HybridRetriever（v1.0.4）+ P1-1 pgvector IVFFlat/HNSW opt-in（v1.0.5）。`ragEmbedderAdapter.EmbedBatch` 已在 PR #20 wire（commit f68900a）摘取 batch 收益。
+
 | 接入点 | 文件:行 | 用途 |
 |---|---|---|
 | `ragcore.New(ragcore.Options{Embedder, Store})` | `knowledgebase/knowledgebase.go:46-49` | RAG 系统构造 |
@@ -441,6 +444,8 @@ sequenceDiagram
 ```
 
 ### 7.2 SSE 流式 /chat/stream
+
+> **T5 SSE cancel 契约 test-pin（2026-05-23）**：`internal/httpapi` 已加 cancel 传播测试，pin 死"client 中断 → server-side ctx cancel → goroutine 退出 + SSE 流终止"语义（commits d4ddf9f RED → db0174d GREEN → b7d6a96 cleanup）。此前该路径仅靠观察行为正确而无回归 guard；测试 pin 后任何破坏 cancel 传播的改动将在 CI 失败。
 
 ```mermaid
 sequenceDiagram
