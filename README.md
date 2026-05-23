@@ -31,7 +31,7 @@ llm-agent-ecosystem/
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
 | `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.0.5** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.1.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
@@ -62,7 +62,10 @@ ollama `errors.go` retains its atomic-state pattern by design),
 via the new `MetadataAwareTool` optional sibling capability; built-in
 `http` and `exec` tools opt in), and customer-support T5 (SSE cancel
 contract test-pinned in `httpapi`) — plus `customer-support` repinned
-to `llm-agent-rag v1.0.5`.
+to `llm-agent-rag v1.1.0` (which folds in v1.0.6 trace+parser fixes and
+the v1.1.0 Self-RAG reflection additions: `Grader` interface,
+`ChunkScore`, `SelectionMode`, and `AdaptiveRetrieval` — all opt-in,
+defaults preserve v1.0.5 behavior).
 
 ## Dependency direction
 
