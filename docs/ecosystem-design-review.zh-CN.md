@@ -11,7 +11,7 @@
 
 ## 0. TL;DR（一页结论）
 
-`llm-agent-ecosystem` 是一个**6 仓 / 单装配方向 / 共 ~66K 行 Go**（含测试）的 LLM 智能体框架家族。它的最大独特卖点是：**核心 `llm-agent` 真的 stdlib-only**（`go.sum` 只有 2 行，全部是 RAG 反向边的校验），所有"重"依赖（OTel SDK、provider SDK、SQLite、pgvector、CEL）都被推到外围装饰器或 carve-out 子包；这让"读完每一行再决定要不要用"在工程上成立。
+`llm-agent-ecosystem` 是一个**6 仓 / 单装配方向 / 共 ~66K 行 Go**（含测试）的 LLM 智能体框架家族。它的最大独特卖点是：**核心 `llm-agent` 真的 stdlib-only**（P0-2 之后 `go.mod` 零反向边、`go.sum` 为空），所有"重"依赖（OTel SDK、provider SDK、SQLite、pgvector、CEL）都被推到外围装饰器或 carve-out 子包；这让"读完每一行再决定要不要用"在工程上成立。
 
 但在"做到了多少"这个问题上要分档评：
 
@@ -21,7 +21,7 @@
 
 **判断建议**：
 - 想白盒 LLM agent 框架 → 用核心 `llm-agent`，可以 fork。
-- 想 RAG SDK → 用 `llm-agent-rag` v1.x，几乎可以直接 production（先补 ivfflat 索引）。
+- 想 RAG SDK → 用 `llm-agent-rag` v1.x（当前 v1.0.5，2026-05-23 v1.3 perf-wave 闭合），现在可以直接 production：BatchEmbedder + concurrent HybridRetriever + pgvector IVFFlat/HNSW opt-in 均已落地。
 - 想"装饰器风格"的 OTel 接入 → 直接抄 `llm-agent-otel` 的设计。
 - 想看 customer-support demo → 当结构骨架学，**guardrails wiring bug 必须先修**。
 
@@ -33,12 +33,12 @@
 
 ```mermaid
 flowchart TB
-    subgraph fixedpoint["fixed-point（API 冻结）"]
-        rag["llm-agent-rag v1.0.2<br/>(125 .go / 21K LOC)"]
+    subgraph fixedpoint["fixed-point（API 冻结 + v1.3 perf-wave additive 补丁）"]
+        rag["llm-agent-rag v1.0.5<br/>(125 .go / 21K LOC)"]
     end
 
     subgraph core["核心抽象层（stdlib-only）"]
-        agent["llm-agent v0.5.1<br/>(159 .go / 24.5K LOC)"]
+        agent["llm-agent v0.6.1<br/>(159 .go / 24.5K LOC)"]
     end
 
     subgraph adapter["适配层"]
@@ -75,7 +75,7 @@ flowchart TB
 | **设计连贯性** | 高 | K1（streaming union）/ K2（per-(provider×model) caps）/ K3（OTel decorator）三条 keystone 在所有 6 仓里都能找到对应代码点 |
 | **依赖卫生** | 高（核心）/ 中（providers） | core `go.sum` 只 2 行；providers 5 个 SDK 共用 3 套上游（openai-go 服务 openai+deepseek，anthropic-sdk-go 服务 anthropic+minimax） |
 | **可测试性** | 高 | `ScriptedLLM` 是 4 capability 一等公民、`storetest` 22 subtest、provider fixture 三层金字塔、apisnapshot CI gate |
-| **生产度** | 中 | rag 缺生产向量索引；providers 5 个都缺默认 timeout；customer-support 是显式标注的 demo only |
+| **生产度** | 中→高（状态截至 2026-05-23） | ~~rag 缺生产向量索引~~ → P1-1 已 ship in rag v1.0.5（`Config.VectorIndex` IVFFlat/HNSW opt-in）；providers 5 个仍缺默认 timeout（P1-6 unblocked、等 v1.3 next wave）；customer-support 是显式标注的 demo only |
 | **名实一致** | 高（状态截至 2026-05-22） | 原"rag facade 名实不副"已通过 P0-2 drop-dependency 消除；原"customer-support README ≠ wiring"已通过 P0-1 guardrails 装配修复；仅剩 providers"stdlib-only HTTP"措辞误导 + otelmodel timeToFirst histogram 已建但 wrapper 没接（P1-12 未合）|
 | **演进策略** | 高 | rag v1 frozen + /v2 路径明示；flow apisnapshot + 加法兼容；core 4 个 validated 类型禁改 |
 
@@ -324,7 +324,7 @@ $ ls llm-agent/rag/
 
 | 编号 | 仓 | 描述 | 证据 |
 |---|---|---|---|
-| **P1-1** | llm-agent-rag | **生产 Postgres 缺向量索引** — `postgres.Migrate` 不创建 ivfflat / hnsw 索引，生产部署遇到 ~100K chunk 就崩 | `postgres/postgres.go:93-161` |
+| **P1-1**（已修） | llm-agent-rag | ~~生产 Postgres 缺向量索引~~ — 已 ship in rag **v1.0.5**（2026-05-23 v1.3 perf-wave 第 3 棒）：`postgres.Config` 新增 `VectorIndex` 枚举 + `IVFFlatLists` / `HNSWConstructionM` 字段，`Migrate` opt-in `CREATE INDEX ... USING ivfflat / hnsw`。默认零值 = `VectorIndexNone` 向后兼容。预计 ~100K-chunk NN 查询从 ~1.5s 降到 ~80ms (~19×)。 | `postgres/postgres.go:93-161`（含 IndexDDL）|
 | **P1-2** | llm-agent-rag | **InjectionScanner 覆盖不全** — 只在 `Ask` 路径跑 sanitize；`AskGlobal` / `AskDrift` 完全不跑，攻击者注入 community report 描述可绕过 | `rag/inject.go:21-48` + `rag/global.go` / `rag/drift.go` 无 sanitize 调用 |
 | **P1-3**（已修） | llm-agent | ~~comm/a2a 后台 goroutine ctx 泄露~~ — 已修复（PR #3 llm-agent commit 860dd20，状态截至 2026-05-22）：`comm/a2a/server.go:111` 起 worker 用 `ctx, cancel := context.WithCancel(...)`；新增 `task.go:112` `cancelAndFail` + DELETE /tasks/{id} 端点。 | `comm/a2a/server.go:111`、`comm/a2a/task.go:112` |
 | **P1-4**（已修） | llm-agent | ~~runStreamFromBlocking ctx-cancel 不发 Done event~~ — 已修复（PR #2 llm-agent commit 8ffed58，merge 44f547d，状态截至 2026-05-22）：`agent.go:126-128` 在 ctx 取消路径上 best-effort 推 `StepEvent{Done: true, Err: ctx.Err()}`。 | `llm-agent/agent.go:126-128` |
@@ -338,8 +338,8 @@ $ ls llm-agent/rag/
 | **P1-12** | llm-agent-otel | **`timeToFirst` histogram 已 build 但 wrapper 没接** — `otelmodel.streamReader` 写了 `gen_ai.first_token` span event，但 metric 端 instrument 没被 record | `otelmodel/otelmodel.go:76-147` + `otelmetrics/otelmetrics.go:19-26` |
 | **P1-13** | llm-agent-otel | **`otelslog` 仅追加 trace_id，未走 OTel log SDK** — 不能形成 trace/log/metric 三联在同一 backend | `otelslog/otelslog.go:27-36` |
 | **P1-14** | llm-agent-otel | **`otelmodel` 与 `otelmetrics.Recorder` 解耦** — wrapper 不自动调 Recorder，token/duration metric 无人发；调用方需手动 | `otelmodel/otelmodel.go` 全文 + `otelmetrics/otelmetrics.go` |
-| **P1-15** | llm-agent-rag | **`HybridRetriever` 四路顺序** — Dense → Lexical → Structure → Graph 串行，可并发 3-4x | `retrieve.go:984-1009` |
-| **P1-16** | llm-agent-rag | **Embedding 单条串行** — `rag/import.go:76` 真模型吞吐主瓶颈，缺 `BatchEmbedder` optional capability | `rag/import.go:76` |
+| **P1-15**（已修） | llm-agent-rag | ~~`HybridRetriever` 四路顺序~~ — 已 ship in rag **v1.0.4**（2026-05-23 v1.3 perf-wave 第 2 棒）：`HybridRetriever.Retrieve` 改用 `sync.WaitGroup` 并行 fan-out Dense/Lexical/Structure/Graph 四路，按 route 索引确定性 merge fusion trace。wall-clock 从 Σtimes 降到 max(times)，典型 4×。 | `retrieve.go:984-1009`（并发版）|
+| **P1-16**（已修） | llm-agent-rag | ~~Embedding 单条串行~~ — 已 ship in rag **v1.0.3**（2026-05-23 v1.3 perf-wave 第 1 棒）：`embed/embedder.go` 新增 `BatchEmbedder` optional capability；`rag/import.go` type-assert 嗅探后走 batch 路径；providers OpenAI 已 wire（详见 customer-support PR #20）。20× 吞吐改善。 | `rag/import.go:76`（含 BatchEmbedder 嗅探）|
 | **P1-17**（已修） | llm-agent-flow | ~~SQLite 单事件写 ~5ms~~ — 已合并（PR #2 flow v0.1.2，状态截至 2026-05-22）：`store/sqlite/open.go` 已开 WAL + NORMAL fsync。 | `flow/store/sqlite/open.go`（WAL 已启用）|
 | **P1-18**（已修） | llm-agent-flow | ~~FlowEvent.Metadata 缺字段~~ — 已合并（PR #3 flow v0.1.3 commit 77e5be1，状态截至 2026-05-22）：`flow/event.go` 增加 `Metadata map[string]string`；新增 `MetadataAware` optional capability；flowd SSE payload 同步 propagate。 | `flow/event.go`（含 Metadata）|
 | **P1-19** | customer-support | **toolAgent 单趟无 ReAct 第二轮** — 工具结果直接当 final answer，缺客服话术润色 | `toolagent.go:57-133` |
@@ -375,7 +375,7 @@ $ ls llm-agent/rag/
 
 | 仓库 | 复用度 | 推荐姿态 |
 |---|---|---|
-| **`llm-agent-rag`** | A | **可直接 fork production**。fixed-point + api snapshot + 22-subtest store conformance + 双形态 OTel 接缝是工业级设计。先补 ivfflat 索引、Hybrid 并发化、AskGlobal/AskDrift 的 injection sanitize（P1-1/15/2），就达到可生产用。 |
+| **`llm-agent-rag`** | A | **可直接 fork production**（当前 v1.0.5，2026-05-23 v1.3 perf-wave 闭合）。fixed-point + api snapshot + 22-subtest store conformance + 双形态 OTel 接缝是工业级设计。**P1-1 / P1-15 / P1-16 均已 ship**（pgvector index opt-in + concurrent HybridRetriever + BatchEmbedder）；剩余仅 P1-2（AskGlobal/AskDrift injection sanitize）即可全面生产用。 |
 | **`llm-agent` 核心** | A- | **架构可直接 fork**。8-wrapper policy 树、Supervisor-on-StateGraph facade、budget chokepoint 是难得克制的设计。需要修 P0-2（rag facade）+ P1-3/4/5（comm/a2a goroutine 泄露、ctx-cancel Done event、context 包名）。 |
 | **`llm-agent-otel`** | A- | **设计可直接抄**。8-wrapper capability 矩阵 + 双闸门 env opt-in + 基数白名单是教科书级。修 P1-10/11/12/13/14（sampler、env 接管、metric 接入）即可生产。 |
 | **`llm-agent-providers`** | B+ | **结构可 fork，需补完备性**。5 个 provider 共享 fixture + 3 层金字塔是好基础；但 90% 重复（P1-23）+ 5 个缺 timeout + deepseek/minimax conformance 不全（P1-7/8/9）。需要先做 `internal/openaicompat` 抽取。 |
@@ -398,8 +398,8 @@ $ ls llm-agent/rag/
 3. **providers 抽 internal/openaicompat / anthropiccompat**（P1-23）— 防 90% 重复 drift。
 4. **providers 5 个加 default timeout**（P1-6）— 单文件改动，影响巨大。
 5. ~~providers deepseek/minimax 补 K2 capabilitiesForModel + conformance fixture（P1-7/8）~~ — **已完成**（PR #17 + PR #18 providers，状态截至 2026-05-22）。
-6. **rag HybridRetriever 并发化 + BatchEmbedder optional**（P1-15/16）— 3-10x 吞吐。
-7. **rag Postgres Migrate 加 vector index 选项**（P1-1）。
+6. ~~**rag HybridRetriever 并发化 + BatchEmbedder optional**（P1-15/16）~~ — **已完成**（rag v1.0.4 + v1.0.3，状态截至 2026-05-23 v1.3 perf-wave）。
+7. ~~**rag Postgres Migrate 加 vector index 选项**（P1-1）~~ — **已完成**（rag v1.0.5，状态截至 2026-05-23 v1.3 perf-wave 第 3 棒）。
 8. **rag AskGlobal/AskDrift 补 injection sanitize**（P1-2）。
 9. ~~flow SQLite WAL + multi-VALUES INSERT（P1-17）~~ — **已完成 WAL 部分**（PR #2 flow v0.1.2，状态截至 2026-05-22）；multi-VALUES INSERT 仍待做。
 10. **otel NewTracerProvider 暴露 sampler + 接管标准 env**（P1-10/11）。
@@ -467,4 +467,4 @@ $ ls llm-agent/rag/
 
 ---
 
-*本评审完成于 2026-05-21。所有 P0/P1/P2 条目均可在路线图文档（`docs/refactor-and-optimization-roadmap.zh-CN.md`）找到可执行方案。*
+*本评审完成于 2026-05-21；状态块持续更新至 2026-05-23 v1.3 perf-wave 闭合（rag v1.0.3 / v1.0.4 / v1.0.5）。所有 P0/P1/P2 条目均可在路线图文档（`docs/refactor-and-optimization-roadmap.zh-CN.md`）找到可执行方案。*

@@ -1,7 +1,7 @@
 # `llm-agent` 子项目源码级设计
 
 > 仓库路径：`llm-agent-ecosystem/llm-agent/`
-> 当前版本：`v0.5.1`（朝向 `v0.6.0 / v1.2` 推进中）
+> 当前版本：`v0.6.1`（v1.2 Core Capability Deepening 在飞行中）
 > 代码规模：约 159 个 `.go` 文件、~24.5K 行（含测试 ~12K 行非测试源码）
 > 文档对应代码快照：2026-05-21
 
@@ -13,7 +13,7 @@
 
 **硬约束 / Keystone 决策**（写在 `llm-agent/CLAUDE.md` 与 umbrella `README.md`，并由 CI 门禁强制）：
 
-1. **核心 `llm-agent` 必须 stdlib-only**。`go.mod` 仅允许出现一条 `llm-agent-rag` 反向边（为了 RAG facade，见 §9.2 风险）。`go.sum` 实际只有 2 行 —— `llm-agent-rag v1.0.1` 一条直接 + 间接校验。
+1. **核心 `llm-agent` 必须 stdlib-only**。P0-2 落地（2026-05-22，commit 6029565）后，`go.mod` 已无任何反向边，`go.sum` 为空；B4 stdlib-only assertion gate 现断言"zero direct requires"（详见 §9.2 历史与当前态）。
 2. **无 K8s / Helm**：生态范围常驻非目标。
 3. **不允许在 tag 分支保留 `replace`**：CI 门禁 `INFRA-04` 强制。
 4. **`go.work` 一律 `.gitignore`**：CI 跑 `GOWORK=off`。
@@ -29,8 +29,8 @@ llm-agent-customer-support → llm-agent + llm-agent-otel + llm-agent-providers 
 llm-agent-otel             → llm-agent + llm-agent-rag + llm-agent-flow
 llm-agent-providers        → llm-agent
 llm-agent-flow             → llm-agent
-llm-agent                  → llm-agent-rag (仅 RAG facade，见 §9.2)
-llm-agent-rag              → (stdlib only)
+llm-agent                  → (无 — P0-2 已删 rag 反向边，见 §9.2)
+llm-agent-rag              → (核心子包 stdlib-only；postgres 子包带 pgx + pgvector-go)
 ```
 
 ---
@@ -109,7 +109,7 @@ flowchart TB
 | `agentstest/` | 测试公用 `StubTool` / `NewErrorTool` / `RecordingTool` | `stub.go`, `recording.go` |
 | `bench/` | LLM-Agent benchmark 工具集：BFCL / GAIA / Judge / Win Rate / Reporter | `bfcl.go`, `gaia.go`, `judge.go`, `winrate.go`, `reporter.go`, `fixtures.go` |
 | `rl/` | Agentic-RL 评估层：Dataset / Trajectory / Reward / Evaluator / TrainerProxy（仅评估，不训练） | `dataset.go`, `trajectory.go`, `reward.go`, `evaluator.go`, `metrics.go`, `trainer_proxy.go` |
-| `rag/` | **当前为空**（rag-sdk 已分离到 `llm-agent-rag`；目录仅作 facade 占位） | — |
+| `rag/` | **已删除**（P0-2，2026-05-22 commit 6029565）：rag-sdk 由下游直接 `import "github.com/costa92/llm-agent-rag/rag"` | — |
 | `internal/testenv/` | 测试基础设施（`listen` helper） | `listen.go` |
 
 ---
@@ -368,15 +368,16 @@ Semantic  = (vec×0.7 + tag_overlap×0.3) ×          (0.8 + importance×0.4)
 
 `context/token.go:19-43` `SimpleCounter` —— CJK-aware 启发式：ASCII 词 × 1.3 + CJK rune × 1。"intentionally pessimistic"：宁可超估也不能低估。可通过 `WithTokenCounter` 替换为真实 tokenizer。
 
-### 4.6 RAG Facade（当前为空目录）
+### 4.6 RAG Facade（已删除：核心严格 stdlib-only）
 
-**当前实现状态**：
+**当前实现状态**（v0.6.1，2026-05-23）：
 
-- `llm-agent/rag/` 目录存在但 *没有任何 `.go` 文件*（已确认通过 `ls`）。
-- `llm-agent/go.mod` `require github.com/costa92/llm-agent-rag v1.0.1`；`go.sum` 只有这两行。
-- *没有任何源码*（含测试）`import "github.com/costa92/llm-agent-rag"`。`grep -rn 'llm-agent-rag' --include='*.go'` 只在 `agentstest/doc.go` 注释里出现。
+- `llm-agent/rag/` 目录已移除（P0-2，commit 6029565）。
+- `llm-agent/go.mod` 不再 `require github.com/costa92/llm-agent-rag`；`go.sum` 为空。
+- 没有任何源码 import `llm-agent-rag`；`grep -rn 'llm-agent-rag' llm-agent/` 仅在 doc 注释里出现。
+- 下游 `customer-support` 在用 rag 时继续直接 `import "github.com/costa92/llm-agent-rag/rag"`（与历史行为一致）。
 
-**结论**：所谓 "RAG facade" 在当前 v0.5.1 还只是 **占位计划**。`README.md` 第 20-29 行写"RAG has been split into a standalone companion module"是事实，但 facade *本身的代码* 还没落地。这是一处需要在文档与代码之间对齐的差距（见 §9）。
+**结论**：v1.1 时期声称的"唯一允许的反向边"已撤销。核心仓 `llm-agent` 现严格 stdlib-only — B4 stdlib-only assertion gate 已切到 "zero direct requires"（详见 §9 与 `docs/ecosystem-design-review.zh-CN.md` §4.5）。
 
 ### 4.7 Streaming Event Model（K1 keystone）
 
@@ -945,7 +946,7 @@ sequenceDiagram
 #### 问题陈述
 
 1. **`context` 包名与 stdlib `context` 冲突**：约定 `aictx` 别名能解决，但用户每次 import 都要写，新手容易出错。
-2. **`rag/` 目录存在但为空**：godoc 看不到任何内容，下游疑惑"facade 在哪里"。go.mod 里的 `llm-agent-rag` 依赖看起来"无用"。
+2. ~~**`rag/` 目录存在但为空**：godoc 看不到任何内容，下游疑惑"facade 在哪里"。go.mod 里的 `llm-agent-rag` 依赖看起来"无用"。~~（已修，2026-05-22 P0-2 commit 6029565；详见 §9.2 第 1 条）
 3. **`FunctionCallAgent` 单轮限制是隐式的**：注释解释（`llm.Message` 无 `ToolCallID`），但 API 上没有显式提示，初学者会以为支持多轮。
 4. **`Step.Kind == StepThought` 的 Content 模糊**：Reflection 用它存"initial draft: …"和"revised: …"前缀，consumer 想区分初/改稿要做字符串 prefix match —— 反模式。
 5. **examples 都用 ScriptedLLM**：很好，但缺乏一个"如何接真 provider"的 quickstart；下游必须翻到 `llm-agent-providers` repo。
@@ -999,7 +1000,7 @@ sequenceDiagram
 
 短期（v1.2 → v1.3）：
 
-- 落地真正的 RAG facade，把 `rag/` 目录从空目录变成 1 个 `facade.go` —— 显式 transmute `rag.System` / `rag.Embedder` 接口。
+- ~~落地真正的 RAG facade~~（**已采纳替代路径**：P0-2 删 `llm-agent-rag` 反向边、移除 `llm-agent/rag/` 空目录，commit 6029565；详见 §9.2 第 1 条）。
 - 把 §9.2 的 7 个具体风险点加进 v1.3 milestone。
 - 文档化"context 包名冲突"补救（README 加 import alias 章节）。
 
