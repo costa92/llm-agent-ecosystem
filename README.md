@@ -31,7 +31,7 @@ llm-agent-ecosystem/
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
 | `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.6.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.7.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
@@ -85,14 +85,21 @@ additions (`StageAskGlobalMap` / `StageAskGlobalReduce` /
 `StageAskDriftPrimer` / `StageAskDriftLocal` / `StageAskDriftSynth`
 sub-stages on `obs.Stage`, `RetryPolicy.OnRetry` callback for
 per-attempt observability, and the builtin `ClassifyTransientHTTP`
-/ `ClassifyRateLimited` retry classifiers), and the v1.6.0
+/ `ClassifyRateLimited` retry classifiers), the v1.6.0
 diagnostics-export + drift surface (`MarshalBenchmark` /
 `UnmarshalBenchmark` + `WriteBenchmarkJSONL` / `ReadBenchmarkJSONL`
 + `MarshalDiagnostics` / `UnmarshalDiagnostics` for portable
 benchmark/diagnostics IO, plus `CompareBenchmarks` returning a
 `DriftReport` of `MetricDelta` entries with `Direction`
-classification — improved / regressed / unchanged) —
-all opt-in, defaults preserve v1.0.5 behavior).
+classification — improved / regressed / unchanged), and the v1.7.0
+progress + cost-budget + drift-markdown surface
+(`eval.AnswerBenchmark.Progress` streaming progress callback,
+`AskOptions.MaxTotalTokens` cost budget enforced via
+`BudgetExceededError` / `ErrTokenBudgetExceeded` with
+`WithTokenBudget` / `TokenBudgetFrom` context helpers,
+`DriftReport.Markdown` human-readable drift renderer, and
+`HistogramDelta` with `TotalSoFar` for incremental histogram
+tracking) — all opt-in, defaults preserve v1.0.5 behavior).
 
 ## Dependency direction
 
