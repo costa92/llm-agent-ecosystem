@@ -31,7 +31,7 @@ llm-agent-ecosystem/
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
 | `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.8.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.9.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
@@ -106,7 +106,22 @@ with `GraderCacheModeRelevance` / `GraderCacheModeSupport` modes,
 the parallel `JudgeCache` + `MemoryJudgeCache` + `WrapJudge` /
 `NewCachingJudge` + `JudgeCacheKey` for LLM-as-judge call dedup,
 and `BenchmarkResult.Markdown()` for human-readable benchmark
-rendering) — all opt-in, defaults preserve v1.0.5 behavior).
+rendering), and the v1.9.0 global/drift cost-budget surface
+(`GlobalOptions.MaxTotalTokens` + `DriftOptions.MaxTotalTokens`
+extending the v1.7.0 `AskOptions.MaxTotalTokens` budget pattern
+to AskGlobal / AskDrift paths, enforced via the same
+`BudgetExceededError` / `ErrTokenBudgetExceeded`) — all opt-in,
+defaults preserve v1.0.5 behavior).
+
+**v1.9.0 is the final additive v1.x minor release** — the `llm-agent-rag`
+public API enters feature freeze on the `master` branch. Future shape
+changes (breaking signatures, reorganized packages, retired surfaces)
+will land on the `/v2` module path; the design is captured in the
+v2.0 RFC at
+[`llm-agent-rag/docs/v2-rfc.md`](https://github.com/costa92/llm-agent-rag/blob/master/docs/v2-rfc.md).
+Downstream consumers (`llm-agent-customer-support`, `llm-agent-otel`)
+have been bumped through to v1.9.0 and remain pinned during the
+freeze; only patch releases (v1.9.x) will land against the v1 line.
 
 ## Dependency direction
 
