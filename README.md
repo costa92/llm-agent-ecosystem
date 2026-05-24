@@ -31,7 +31,7 @@ llm-agent-ecosystem/
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
 | `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.6.1** | `main` | <https://github.com/costa92/llm-agent> |
-| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.7.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
+| `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.8.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.2.2** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
@@ -99,7 +99,14 @@ progress + cost-budget + drift-markdown surface
 `WithTokenBudget` / `TokenBudgetFrom` context helpers,
 `DriftReport.Markdown` human-readable drift renderer, and
 `HistogramDelta` with `TotalSoFar` for incremental histogram
-tracking) — all opt-in, defaults preserve v1.0.5 behavior).
+tracking), and the v1.8.0 grader/judge cache + benchmark-markdown
+surface (`GraderCache` interface + `MemoryGraderCache` LRU implementation
++ `WrapGrader` / `NewCachingGrader` decorators + `GraderCacheKey` helper
+with `GraderCacheModeRelevance` / `GraderCacheModeSupport` modes,
+the parallel `JudgeCache` + `MemoryJudgeCache` + `WrapJudge` /
+`NewCachingJudge` + `JudgeCacheKey` for LLM-as-judge call dedup,
+and `BenchmarkResult.Markdown()` for human-readable benchmark
+rendering) — all opt-in, defaults preserve v1.0.5 behavior).
 
 ## Dependency direction
 
