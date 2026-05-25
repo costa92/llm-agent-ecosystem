@@ -10,6 +10,7 @@ all_repos=(
   llm-agent-providers
   llm-agent-customer-support
   llm-agent-flow
+  llm-agent-memory
 )
 
 launchable_repos=(
@@ -25,6 +26,7 @@ repo_url() {
     llm-agent-providers) printf '%s\n' 'https://github.com/costa92/llm-agent-providers.git' ;;
     llm-agent-customer-support) printf '%s\n' 'https://github.com/costa92/llm-agent-customer-support.git' ;;
     llm-agent-flow) printf '%s\n' 'https://github.com/costa92/llm-agent-flow.git' ;;
+    llm-agent-memory) printf '%s\n' 'https://github.com/costa92/llm-agent-memory.git' ;;
     *) printf '%s\n' "" ;;
   esac
 }
