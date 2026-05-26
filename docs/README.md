@@ -14,7 +14,7 @@
 | **首读路径**（30 分钟内建立心智模型） | 新人 / reviewer | (1) [`current-project-analysis.zh-CN.md`](./current-project-analysis.zh-CN.md) → (2) [`architecture-and-sequence-diagrams.zh-CN.md`](./architecture-and-sequence-diagrams.zh-CN.md) → (3) [`source-design-umbrella-root.zh-CN.md`](./source-design-umbrella-root.zh-CN.md) |
 | **深读路径**（按子系统逐仓深入） | 贡献者 / 维护者 | (1) [`source-design-llm-agent.zh-CN.md`](./source-design-llm-agent.zh-CN.md) → (2) [`source-design-llm-agent-rag.zh-CN.md`](./source-design-llm-agent-rag.zh-CN.md) → (3) [`source-design-llm-agent-providers.zh-CN.md`](./source-design-llm-agent-providers.zh-CN.md) → (4) [`source-design-llm-agent-otel.zh-CN.md`](./source-design-llm-agent-otel.zh-CN.md) → (5) [`source-design-llm-agent-flow.zh-CN.md`](./source-design-llm-agent-flow.zh-CN.md) → (6) [`source-design-llm-agent-customer-support.zh-CN.md`](./source-design-llm-agent-customer-support.zh-CN.md) |
 | **评审路径**（找设计争议、风险点、改进点） | tech-lead / 架构师 | (1) [`ecosystem-design-review.zh-CN.md`](./ecosystem-design-review.zh-CN.md) → (2) [`subsystems-design-notes.zh-CN.md`](./subsystems-design-notes.zh-CN.md) → (3) `source-design-*` 各文档的 §8 / §9 优化与遗留章节 |
-| **路线图路径**（理解 v1.2 → v1.3 → v2 走向） | 产品/项目管理 | (1) [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) → (2) `llm-agent/.planning/STATE.md` + `ROADMAP.md`（核心仓 source of truth）|
+| **路线图路径**（理解 v1.2 → v1.3 → v2 走向） | 产品/项目管理 | (1) [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) → (2) [`memory-roadmap.zh-CN.md`](./memory-roadmap.zh-CN.md) → (3) [`multi-service-memory-architecture.zh-CN.md`](./multi-service-memory-architecture.zh-CN.md) → (4) [`memory-gateway-api-contract.zh-CN.md`](./memory-gateway-api-contract.zh-CN.md) → (5) [`memory-postgres-outbox-schema.zh-CN.md`](./memory-postgres-outbox-schema.zh-CN.md) → (6) `llm-agent/.planning/STATE.md` + `ROADMAP.md`（核心仓 source of truth）|
 
 ### 1.2 文档拓扑
 
@@ -67,12 +67,16 @@ source-design-          source-design-                                   │
 | 文档 | 内容 |
 |---|---|
 | [`architecture-and-sequence-diagrams.zh-CN.md`](./architecture-and-sequence-diagrams.zh-CN.md) | 10 张架构图 + 7 张关键时序图（mermaid），全部带 `file:line` 锚点 |
+| [`multi-service-memory-architecture.zh-CN.md`](./multi-service-memory-architecture.zh-CN.md) | 多服务部署下的 memory 组件级架构草图，按服务 / API / worker / DB 拆分，并给出 recall、write、forget 三条关键链路 |
 
 ### 2.4 路线图
 
 | 文档 | 内容 |
 |---|---|
 | [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) | 重构计划与短/中/长期优化路线（v1.2 → v1.3 → v2） |
+| [`memory-roadmap.zh-CN.md`](./memory-roadmap.zh-CN.md) | `llm-agent/memory/` 的专项优化路线图，拆分 `v0.x` 加法改动与 `v1/v2` breaking change，并附阶段风险与验收标准 |
+| [`memory-gateway-api-contract.zh-CN.md`](./memory-gateway-api-contract.zh-CN.md) | 多服务 `Memory Gateway` 的 API 契约草案，覆盖 recall、write、manage、forget/delete、版本与幂等约束 |
+| [`memory-postgres-outbox-schema.zh-CN.md`](./memory-postgres-outbox-schema.zh-CN.md) | 多服务 memory 的 `Postgres + Transactional Outbox` 表结构草案，覆盖真相源、事件流、幂等、并发控制与失效传播辅助模型 |
 
 ### 2.5 CI / Workflows 设计
 
