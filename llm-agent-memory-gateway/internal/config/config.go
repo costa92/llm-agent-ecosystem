@@ -32,6 +32,15 @@ type Config struct {
 	VectorIndex        string
 	OutboxPollInterval time.Duration
 	OutboxBatchSize    int
+
+	// EmbeddingCostMicrosPerToken is the unit cost (in micro-units) applied to
+	// the embedding_cost_total counter on every successful Embed call. The
+	// gateway treats "tokens" as the whitespace-separated word count of the
+	// embedded text (the rag/embed SDK does not return token counts at v1);
+	// see internal/service/vector_projector.go for the count source.
+	// Default 0 keeps the counter at zero for deployments that haven't wired
+	// up a cost rate yet.
+	EmbeddingCostMicrosPerToken uint64
 }
 
 func LoadFromEnv() (Config, error) {
@@ -139,6 +148,14 @@ func LoadFromEnv() (Config, error) {
 			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_OUTBOX_BATCH_SIZE must be > 0")
 		}
 		cfg.OutboxBatchSize = batchSize
+	}
+
+	if costValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS"); costValue != "" {
+		cost, err := strconv.ParseUint(costValue, 10, 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS: %w", err)
+		}
+		cfg.EmbeddingCostMicrosPerToken = cost
 	}
 
 	return cfg, nil

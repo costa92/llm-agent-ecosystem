@@ -11,9 +11,11 @@ import (
 )
 
 type RAGStoreVectorCandidateSource struct {
-	embedder  ragembed.Embedder
-	store     ragstore.Store
-	namespace string
+	embedder           ragembed.Embedder
+	store              ragstore.Store
+	namespace          string
+	metrics            EmbeddingMetricsSink
+	costMicrosPerToken uint64
 }
 
 func NewRAGStoreVectorCandidateSource(embedder ragembed.Embedder, store ragstore.Store, namespace string) *RAGStoreVectorCandidateSource {
@@ -22,6 +24,16 @@ func NewRAGStoreVectorCandidateSource(embedder ragembed.Embedder, store ragstore
 		store:     store,
 		namespace: namespace,
 	}
+}
+
+// SetEmbeddingMetrics wires per-call embedding telemetry into the recall
+// candidate source. A nil sink disables emission (the default).
+// costMicrosPerToken sets the per-token cost rate in micro-units; 0 leaves
+// the cost counter at zero. Safe to call once at construction; not safe for
+// concurrent reconfiguration.
+func (s *RAGStoreVectorCandidateSource) SetEmbeddingMetrics(sink EmbeddingMetricsSink, costMicrosPerToken uint64) {
+	s.metrics = sink
+	s.costMicrosPerToken = costMicrosPerToken
 }
 
 func (s *RAGStoreVectorCandidateSource) Store() ragstore.Store {
@@ -39,9 +51,26 @@ func (s *RAGStoreVectorCandidateSource) RecallCandidates(ctx context.Context, sc
 		topK = 8
 	}
 
+	bucket := TenantBucket(scope.TenantID)
+	if s.metrics != nil {
+		s.metrics.AddEmbeddingRequest(bucket)
+	}
+
 	vec, err := s.embedder.Embed(ctx, query)
 	if err != nil {
+		// Error path: only request_total incremented. Applied/tokens/cost
+		// stay at zero so they track successful embeddings.
 		return nil, fmt.Errorf("memory-gateway/service: embed recall query: %w", err)
+	}
+	if s.metrics != nil {
+		tokens := embeddingTokenCount(query)
+		s.metrics.AddEmbeddingApplied(bucket)
+		if tokens > 0 {
+			s.metrics.AddEmbeddingTokens(bucket, tokens)
+			if s.costMicrosPerToken > 0 {
+				s.metrics.AddEmbeddingCost(bucket, tokens*s.costMicrosPerToken)
+			}
+		}
 	}
 	hits, err := s.store.Search(ctx, ragstore.Query{
 		Namespace:       resolveVectorNamespace(s.namespace, scope),

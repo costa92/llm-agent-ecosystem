@@ -16,9 +16,11 @@ type VectorProjector interface {
 }
 
 type RAGVectorProjector struct {
-	embedder  ragembed.Embedder
-	store     ragstore.Store
-	namespace string
+	embedder            ragembed.Embedder
+	store               ragstore.Store
+	namespace           string
+	metrics             EmbeddingMetricsSink
+	costMicrosPerToken  uint64
 }
 
 func NewRAGVectorProjector(embedder ragembed.Embedder, store ragstore.Store, namespace string) *RAGVectorProjector {
@@ -29,6 +31,15 @@ func NewRAGVectorProjector(embedder ragembed.Embedder, store ragstore.Store, nam
 	}
 }
 
+// SetEmbeddingMetrics wires per-call embedding telemetry into the projector.
+// A nil sink disables emission (the default). costMicrosPerToken sets the
+// per-token cost rate in micro-units; 0 leaves the cost counter at zero.
+// Safe to call once at construction; not safe for concurrent reconfiguration.
+func (p *RAGVectorProjector) SetEmbeddingMetrics(sink EmbeddingMetricsSink, costMicrosPerToken uint64) {
+	p.metrics = sink
+	p.costMicrosPerToken = costMicrosPerToken
+}
+
 func (p *RAGVectorProjector) ProjectUpsert(ctx context.Context, scope authz.Scope, record corememory.MemoryRecord) error {
 	if p.embedder == nil {
 		return fmt.Errorf("memory-gateway/service: rag vector projector requires an embedder")
@@ -37,9 +48,27 @@ func (p *RAGVectorProjector) ProjectUpsert(ctx context.Context, scope authz.Scop
 		return fmt.Errorf("memory-gateway/service: rag vector projector requires a store")
 	}
 
+	bucket := TenantBucket(record.TenantID)
+	if p.metrics != nil {
+		p.metrics.AddEmbeddingRequest(bucket)
+	}
+
 	vec, err := p.embedder.Embed(ctx, record.Content)
 	if err != nil {
+		// On embed failure only request_total has incremented; applied,
+		// tokens, and cost stay at zero so the cost-class counters reflect
+		// only successful calls.
 		return fmt.Errorf("memory-gateway/service: embed memory record: %w", err)
+	}
+	if p.metrics != nil {
+		tokens := embeddingTokenCount(record.Content)
+		p.metrics.AddEmbeddingApplied(bucket)
+		if tokens > 0 {
+			p.metrics.AddEmbeddingTokens(bucket, tokens)
+			if p.costMicrosPerToken > 0 {
+				p.metrics.AddEmbeddingCost(bucket, tokens*p.costMicrosPerToken)
+			}
+		}
 	}
 	chunk := ragstore.StoredChunk{
 		ID:        record.MemoryID,

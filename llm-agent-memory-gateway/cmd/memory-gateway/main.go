@@ -69,7 +69,9 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 		return nil, nil, err
 	}
 
-	vectorSource, vectorCleanup, err := buildVectorCandidateSource(ctx, cfg)
+	metrics := observability.NewMetrics()
+
+	vectorSource, vectorCleanup, err := buildVectorCandidateSource(ctx, cfg, metrics)
 	if err != nil {
 		pool.Close()
 		return nil, nil, err
@@ -77,8 +79,6 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 	if vectorCleanup != nil {
 		cleanupFns = append(cleanupFns, vectorCleanup)
 	}
-
-	metrics := observability.NewMetrics()
 	svc, err := service.New(
 		store,
 		buildRecallBackend(pool, store, cfg, vectorSource),
@@ -104,7 +104,7 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 	}
 
 	if cfg.VectorEnabled {
-		projector := buildVectorProjector(cfg, vectorSource)
+		projector := buildVectorProjector(cfg, vectorSource, metrics)
 		if projector != nil {
 			relayObserver := slogOutboxProjectionObserver{logger: logger}
 			relay, err := pgmemory.NewRelay(store, service.NewOutboxVectorPublisher(
@@ -155,7 +155,7 @@ func buildRecallBackend(pool *pgxpool.Pool, store corememory.RecordStore, cfg co
 	}
 }
 
-func buildVectorCandidateSource(ctx context.Context, cfg config.Config) (service.RecallCandidateSource, func(), error) {
+func buildVectorCandidateSource(ctx context.Context, cfg config.Config, metrics *observability.Metrics) (service.RecallCandidateSource, func(), error) {
 	if !cfg.VectorEnabled {
 		return service.NewNullVectorCandidateSource(), nil, nil
 	}
@@ -191,10 +191,13 @@ func buildVectorCandidateSource(ctx context.Context, cfg config.Config) (service
 		vectorStore,
 		cfg.VectorNamespace,
 	)
+	if metrics != nil {
+		source.SetEmbeddingMetrics(metrics, cfg.EmbeddingCostMicrosPerToken)
+	}
 	return source, pool.Close, nil
 }
 
-func buildVectorProjector(cfg config.Config, source service.RecallCandidateSource) service.VectorProjector {
+func buildVectorProjector(cfg config.Config, source service.RecallCandidateSource, metrics *observability.Metrics) service.VectorProjector {
 	if !cfg.VectorEnabled {
 		return nil
 	}
@@ -202,11 +205,15 @@ func buildVectorProjector(cfg config.Config, source service.RecallCandidateSourc
 	if !ok {
 		return nil
 	}
-	return service.NewRAGVectorProjector(
+	projector := service.NewRAGVectorProjector(
 		ragembed.NewHashEmbedder(cfg.VectorDimension),
 		ragSource.Store(),
 		cfg.VectorNamespace,
 	)
+	if metrics != nil {
+		projector.SetEmbeddingMetrics(metrics, cfg.EmbeddingCostMicrosPerToken)
+	}
+	return projector
 }
 
 func parseVectorIndex(index string) ragpg.VectorIndex {

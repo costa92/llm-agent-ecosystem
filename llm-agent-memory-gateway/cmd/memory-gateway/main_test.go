@@ -85,7 +85,7 @@ func TestBuildRecallBackend_SupportsConfiguredModes(t *testing.T) {
 }
 
 func TestBuildVectorCandidateSource_DisabledReturnsNullSource(t *testing.T) {
-	source, cleanup, err := buildVectorCandidateSource(context.Background(), config.Config{VectorEnabled: false})
+	source, cleanup, err := buildVectorCandidateSource(context.Background(), config.Config{VectorEnabled: false}, nil)
 	if err != nil {
 		t.Fatalf("buildVectorCandidateSource() error = %v", err)
 	}

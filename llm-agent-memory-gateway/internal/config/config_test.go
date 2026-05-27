@@ -249,3 +249,31 @@ func TestLoadFromEnv_RejectsNonPositiveOutboxBatchSize(t *testing.T) {
 		t.Fatal("expected outbox batch size error")
 	}
 }
+
+func TestLoadFromEnv_EmbeddingCostMicrosPerTokenDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_ADDR", "")
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.EmbeddingCostMicrosPerToken != 0 {
+		t.Fatalf("EmbeddingCostMicrosPerToken = %d, want 0 (default)", cfg.EmbeddingCostMicrosPerToken)
+	}
+}
+
+func TestLoadFromEnv_EmbeddingCostMicrosPerTokenOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_ADDR", "")
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS", "75")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.EmbeddingCostMicrosPerToken != 75 {
+		t.Fatalf("EmbeddingCostMicrosPerToken = %d, want 75", cfg.EmbeddingCostMicrosPerToken)
+	}
+}
