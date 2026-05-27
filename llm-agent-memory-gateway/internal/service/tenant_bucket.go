@@ -26,3 +26,9 @@ func tenantBucket(tenantID string) string {
 	_, _ = h.Write([]byte(tenantID))
 	return fmt.Sprintf("%02d", h.Sum32()%TenantBucketModulus)
 }
+
+// TenantBucket exposes tenantBucket to other packages (notably the
+// observability observers wired in metrics.go) so the same bucketing rule is
+// applied at every metric call site. The contract matches tenantBucket
+// exactly.
+func TenantBucket(tenantID string) string { return tenantBucket(tenantID) }

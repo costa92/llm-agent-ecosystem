@@ -389,6 +389,17 @@ func (o outboxMetricsObserver) ObserveProjection(_ context.Context, obs service.
 	case "ignored":
 		o.metrics.AddOutboxIgnored()
 	}
+
+	// Lifecycle counters fire once per observation that corresponds to a
+	// memory_disabled / memory_deleted outbox event, regardless of the
+	// projection Status. Bucket the tenant_id at the call site so the metric
+	// stays within the cardinality budget (Open Decisions / Cardinality).
+	switch obs.EventType {
+	case "memory_disabled":
+		o.metrics.AddEpisodicDisabled(service.TenantBucket(obs.TenantID))
+	case "memory_deleted":
+		o.metrics.AddEpisodicDeleted(service.TenantBucket(obs.TenantID))
+	}
 }
 
 type composedTraceEmitter struct {

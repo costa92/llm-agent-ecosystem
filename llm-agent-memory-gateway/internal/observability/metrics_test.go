@@ -275,6 +275,98 @@ func TestMetrics_HandlerExposes_RecallSelected(t *testing.T) {
 	}
 }
 
+// ---- outbox lifecycle counters (Task 8) ----
+
+func TestOutboxObserver_DisabledIncrementsEpisodicDisabled(t *testing.T) {
+	m := NewMetrics()
+	observer := m.OutboxObserver()
+	observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+		Status:    "projected",
+		EventType: "memory_disabled",
+		TenantID:  "tenant-a",
+	})
+
+	wantBucket := service.TenantBucket("tenant-a")
+	snap := m.Snapshot()
+	if got := snap.EpisodicDisabledTotal[wantBucket]; got != 1 {
+		t.Fatalf("episodic_disabled[%s] = %d, want 1", wantBucket, got)
+	}
+	if len(snap.EpisodicDeletedTotal) != 0 {
+		t.Fatalf("episodic_deleted unexpectedly populated: %+v", snap.EpisodicDeletedTotal)
+	}
+}
+
+func TestOutboxObserver_DeletedIncrementsEpisodicDeleted(t *testing.T) {
+	m := NewMetrics()
+	observer := m.OutboxObserver()
+	observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+		Status:    "projected",
+		EventType: "memory_deleted",
+		TenantID:  "tenant-b",
+	})
+
+	wantBucket := service.TenantBucket("tenant-b")
+	snap := m.Snapshot()
+	if got := snap.EpisodicDeletedTotal[wantBucket]; got != 1 {
+		t.Fatalf("episodic_deleted[%s] = %d, want 1", wantBucket, got)
+	}
+	if len(snap.EpisodicDisabledTotal) != 0 {
+		t.Fatalf("episodic_disabled unexpectedly populated: %+v", snap.EpisodicDisabledTotal)
+	}
+}
+
+func TestOutboxObserver_OtherEventTypesDoNotTouchLifecycleCounters(t *testing.T) {
+	m := NewMetrics()
+	observer := m.OutboxObserver()
+	for _, eventType := range []string{"memory_created", "memory_updated", "memory_pinned", "memory_unpinned", "memory_enabled", "memory_unknown"} {
+		observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+			Status:    "projected",
+			EventType: eventType,
+			TenantID:  "tenant-c",
+		})
+	}
+
+	snap := m.Snapshot()
+	if len(snap.EpisodicDisabledTotal) != 0 || len(snap.EpisodicDeletedTotal) != 0 {
+		t.Fatalf("lifecycle counters bled from non-matching events: disabled=%+v deleted=%+v",
+			snap.EpisodicDisabledTotal, snap.EpisodicDeletedTotal)
+	}
+}
+
+func TestOutboxObserver_LifecycleBucketsByTenantID(t *testing.T) {
+	m := NewMetrics()
+	observer := m.OutboxObserver()
+	observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+		EventType: "memory_disabled",
+		TenantID:  "alpha",
+	})
+	observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+		EventType: "memory_disabled",
+		TenantID:  "alpha",
+	})
+	observer.ObserveProjection(context.Background(), service.OutboxProjectionObservation{
+		EventType: "memory_disabled",
+		TenantID:  "beta",
+	})
+
+	bucketAlpha := service.TenantBucket("alpha")
+	bucketBeta := service.TenantBucket("beta")
+	snap := m.Snapshot()
+	wantAlpha := uint64(2)
+	if bucketAlpha == bucketBeta {
+		// alpha and beta collided into the same bucket — total should be 3 there.
+		wantAlpha = 3
+	}
+	if got := snap.EpisodicDisabledTotal[bucketAlpha]; got != wantAlpha {
+		t.Fatalf("episodic_disabled[%s] = %d, want %d", bucketAlpha, got, wantAlpha)
+	}
+	if bucketAlpha != bucketBeta {
+		if got := snap.EpisodicDisabledTotal[bucketBeta]; got != 1 {
+			t.Fatalf("episodic_disabled[%s] = %d, want 1", bucketBeta, got)
+		}
+	}
+}
+
 // ---- trace_dropped wiring (sink-as-source-of-truth) ----
 
 func TestMetrics_TraceDroppedReadsFromSource(t *testing.T) {
