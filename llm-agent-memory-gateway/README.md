@@ -168,3 +168,66 @@ Design references:
 
 - `docs/superpowers/specs/2026-05-26-memory-gateway-module-design.md`
 - `docs/memory-gateway-api-contract.zh-CN.md`
+
+## M7: Validation telemetry + decision trace
+
+M7 adds best-effort persisted decision traces and a 10-counter validation
+subset to the existing `/metrics` endpoint. Zero SDK changes; one Postgres
+migration (the `memory_decision_trace` table, added by
+`llm-agent-memory-postgres` Task 1). All counters carry a single
+`tenant_bucket` label dimension (FNV-32a hash of `tenant_id` mod 32) to keep
+metric cardinality bounded.
+
+### New runtime configuration
+
+| Env var | Default | Semantic |
+|---|---|---|
+| `LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS` | `0` | Per-token cost (micro-units) applied to `embedding_cost_total`. Default 0 leaves the counter at zero. |
+| `LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER` | `1024` | In-memory queue size for the async decision-trace sink. Overflow drops bump `trace_dropped_total{reason="buffer_full"}`. |
+| `LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH` | `50` | Max rows per `INSERT` issued by the sink writer. |
+| `LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN` | `5s` | Drain budget on shutdown. Rows that miss the budget land in `trace_dropped_total{reason="shutdown"}`. |
+| `LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL` | `5m` | Period of the storage-bytes cron that refreshes `memory_storage_bytes_total` / `vector_storage_bytes_total`. |
+| `LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION` | `false` | Forward-looking flag (M8); v1 leaves trace retention as an operator obligation per spec OD-5. |
+
+### Counters
+
+| Name | Label | Source |
+|---|---|---|
+| `embedding_request_total` | `tenant_bucket` | Every Embed call site (success or error). |
+| `embedding_applied_total` | `tenant_bucket` | Successful Embed calls only. |
+| `embedding_tokens_total` | `tenant_bucket` | Token count returned by the embedder, summed per success. |
+| `embedding_cost_total` | `tenant_bucket` | `tokens × LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS`, summed per success. |
+| `memory_storage_bytes_total` | `tenant_bucket` | Gauge — last write wins. Source: storage cron `SUM(octet_length(content))` over `memory_record`. |
+| `vector_storage_bytes_total` | `tenant_bucket` | Gauge. **Zero in v1** — vector embeddings live in a separate RAG vector store (`llm-agent-rag/postgres`), not in this Postgres database. M8 may wire that source. |
+| `episodic_disabled_total` | `tenant_bucket` | Outbox `memory_disabled` projection observations. |
+| `episodic_deleted_total` | `tenant_bucket` | Outbox `memory_deleted` projection observations. |
+| `recall_returned_total` | `tenant_bucket` | Count of records the recall backend returned (pre-budget). |
+| `recall_selected_total` | `tenant_bucket` | Count of records that survived post-budget filtering and were returned. |
+| `trace_dropped_total` | `reason` ∈ {`buffer_full`,`db_error`,`shutdown`} | Read straight from the sink's drop counters. The 3 reason values are bounded at compile time and the only legitimate non-`tenant_bucket` label in this set. |
+| `storage_cron_failures_total` | _(none)_ | Global counter of failed storage-cron query ticks; the failure is not per-tenant. |
+
+### Decision-trace persistence
+
+The gateway persists structured decision-trace rows to the
+`memory_decision_trace` table (migrated by `llm-agent-memory-postgres`).
+Persistence is **best-effort**:
+
+- The sink is non-blocking on the request path; rows that cannot be queued
+  immediately are dropped and counted in `trace_dropped_total{reason="buffer_full"}`.
+- The writer goroutine retries failed `INSERT`s with exponential backoff (3
+  attempts, 50/200/800 ms); after the final attempt the batch is counted in
+  `trace_dropped_total{reason="db_error"}`.
+- On shutdown the writer drains the queue within `TRACE_SHUTDOWN`; remaining
+  rows land in `trace_dropped_total{reason="shutdown"}`.
+
+The `reason` column is free-form in v1; the enum is **frozen at M8** —
+operators should treat it as opaque text for now and not gate alerts on
+specific reason values until v2.
+
+Tenant isolation is enforced two ways:
+
+- The `tenant_id` column is written verbatim from the emitter so per-tenant
+  trace queries stay clean.
+- All counters bucket the tenant_id before storage. Two tenants in the same
+  bucket share a metric value but neither tenant's identifier can be
+  recovered from the counter — bucket aggregation is one-way.
