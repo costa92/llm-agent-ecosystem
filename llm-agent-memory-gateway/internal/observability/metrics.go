@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/costa92/llm-agent-memory-gateway/internal/service"
@@ -21,6 +23,26 @@ type Snapshot struct {
 	OutboxProjectionStaleTotal     int64
 	OutboxProjectionFailedTotal    int64
 	OutboxProjectionIgnoredTotal   int64
+
+	// M7 validation counters — one map entry per tenant_bucket. The bucket
+	// dimension is the only label these counters carry; see
+	// docs/superpowers/plans/2026-05-27-m7-validation-telemetry-and-trace.md
+	// "Open Decisions / Cardinality".
+	EmbeddingRequestTotal   map[string]uint64
+	EmbeddingAppliedTotal   map[string]uint64
+	EmbeddingTokensTotal    map[string]uint64
+	EmbeddingCostTotal      map[string]uint64
+	MemoryStorageBytesTotal map[string]uint64 // gauge — last write wins per bucket
+	VectorStorageBytesTotal map[string]uint64 // gauge — last write wins per bucket
+	EpisodicDisabledTotal   map[string]uint64
+	EpisodicDeletedTotal    map[string]uint64
+	RecallReturnedTotal     map[string]uint64
+	RecallSelectedTotal     map[string]uint64
+
+	// TraceDropped is read from the injected source (sink-as-source-of-truth)
+	// so the gateway does not double-book this counter. Zero values when no
+	// source is wired.
+	TraceDropped service.TraceDroppedSnapshot
 }
 
 type Metrics struct {
@@ -35,9 +57,44 @@ type Metrics struct {
 	outboxStale     atomic.Int64
 	outboxFailed    atomic.Int64
 	outboxIgnored   atomic.Int64
+
+	// Per-bucket counters. mu guards map structure; the *atomic.Uint64 values
+	// themselves are lock-free once their map entry exists, so the hot path
+	// after first insert is a read-lock + atomic.Add.
+	mu                 sync.RWMutex
+	embeddingRequest   map[string]*atomic.Uint64
+	embeddingApplied   map[string]*atomic.Uint64
+	embeddingTokens    map[string]*atomic.Uint64
+	embeddingCost      map[string]*atomic.Uint64
+	memoryStorageBytes map[string]*atomic.Uint64
+	vectorStorageBytes map[string]*atomic.Uint64
+	episodicDisabled   map[string]*atomic.Uint64
+	episodicDeleted    map[string]*atomic.Uint64
+	recallReturned     map[string]*atomic.Uint64
+	recallSelected     map[string]*atomic.Uint64
+
+	// traceDropSource returns the live drop counters from the trace sink. The
+	// default returns a zero snapshot so handler exposition lines remain
+	// present (and zero) even when no sink is wired.
+	traceDropSourceMu sync.RWMutex
+	traceDropSource   func() service.TraceDroppedSnapshot
 }
 
-func NewMetrics() *Metrics { return &Metrics{} }
+func NewMetrics() *Metrics {
+	return &Metrics{
+		embeddingRequest:   make(map[string]*atomic.Uint64),
+		embeddingApplied:   make(map[string]*atomic.Uint64),
+		embeddingTokens:    make(map[string]*atomic.Uint64),
+		embeddingCost:      make(map[string]*atomic.Uint64),
+		memoryStorageBytes: make(map[string]*atomic.Uint64),
+		vectorStorageBytes: make(map[string]*atomic.Uint64),
+		episodicDisabled:   make(map[string]*atomic.Uint64),
+		episodicDeleted:    make(map[string]*atomic.Uint64),
+		recallReturned:     make(map[string]*atomic.Uint64),
+		recallSelected:     make(map[string]*atomic.Uint64),
+		traceDropSource:    func() service.TraceDroppedSnapshot { return service.TraceDroppedSnapshot{} },
+	}
+}
 
 func (m *Metrics) AddRecallL1Hit()        { m.recallL1Hit.Add(1) }
 func (m *Metrics) AddRecallL2Hit()        { m.recallL2Hit.Add(1) }
@@ -50,8 +107,88 @@ func (m *Metrics) AddOutboxStale()        { m.outboxStale.Add(1) }
 func (m *Metrics) AddOutboxFailed()       { m.outboxFailed.Add(1) }
 func (m *Metrics) AddOutboxIgnored()      { m.outboxIgnored.Add(1) }
 
+// ---- M7 per-bucket counters ----
+
+func (m *Metrics) AddEmbeddingRequest(tenantBucket string) { m.addBucket(m.embeddingRequest, tenantBucket, 1) }
+func (m *Metrics) AddEmbeddingApplied(tenantBucket string) { m.addBucket(m.embeddingApplied, tenantBucket, 1) }
+func (m *Metrics) AddEmbeddingTokens(tenantBucket string, n uint64) {
+	m.addBucket(m.embeddingTokens, tenantBucket, n)
+}
+func (m *Metrics) AddEmbeddingCost(tenantBucket string, micros uint64) {
+	m.addBucket(m.embeddingCost, tenantBucket, micros)
+}
+func (m *Metrics) SetMemoryStorageBytes(tenantBucket string, b uint64) {
+	m.setBucket(m.memoryStorageBytes, tenantBucket, b)
+}
+func (m *Metrics) SetVectorStorageBytes(tenantBucket string, b uint64) {
+	m.setBucket(m.vectorStorageBytes, tenantBucket, b)
+}
+func (m *Metrics) AddEpisodicDisabled(tenantBucket string) {
+	m.addBucket(m.episodicDisabled, tenantBucket, 1)
+}
+func (m *Metrics) AddEpisodicDeleted(tenantBucket string) {
+	m.addBucket(m.episodicDeleted, tenantBucket, 1)
+}
+func (m *Metrics) AddRecallReturned(tenantBucket string, n uint64) {
+	m.addBucket(m.recallReturned, tenantBucket, n)
+}
+func (m *Metrics) AddRecallSelected(tenantBucket string, n uint64) {
+	m.addBucket(m.recallSelected, tenantBucket, n)
+}
+
+// SetTraceDropSource wires the sink's drop counters as the source of truth for
+// the trace_dropped_total exposition. Passing nil restores the zero-snapshot
+// default. Safe to call concurrently with Handler().
+func (m *Metrics) SetTraceDropSource(fn func() service.TraceDroppedSnapshot) {
+	m.traceDropSourceMu.Lock()
+	defer m.traceDropSourceMu.Unlock()
+	if fn == nil {
+		m.traceDropSource = func() service.TraceDroppedSnapshot { return service.TraceDroppedSnapshot{} }
+		return
+	}
+	m.traceDropSource = fn
+}
+
+// addBucket is the lock-light per-bucket increment. The fast path takes a
+// read-lock, finds the counter, and atomically adds; first-touch on a bucket
+// upgrades to a write-lock.
+func (m *Metrics) addBucket(buckets map[string]*atomic.Uint64, key string, delta uint64) {
+	m.mu.RLock()
+	v, ok := buckets[key]
+	m.mu.RUnlock()
+	if ok {
+		v.Add(delta)
+		return
+	}
+	m.mu.Lock()
+	// Re-check under write-lock — another goroutine may have inserted.
+	if v, ok = buckets[key]; !ok {
+		v = new(atomic.Uint64)
+		buckets[key] = v
+	}
+	m.mu.Unlock()
+	v.Add(delta)
+}
+
+func (m *Metrics) setBucket(buckets map[string]*atomic.Uint64, key string, value uint64) {
+	m.mu.RLock()
+	v, ok := buckets[key]
+	m.mu.RUnlock()
+	if ok {
+		v.Store(value)
+		return
+	}
+	m.mu.Lock()
+	if v, ok = buckets[key]; !ok {
+		v = new(atomic.Uint64)
+		buckets[key] = v
+	}
+	m.mu.Unlock()
+	v.Store(value)
+}
+
 func (m *Metrics) Snapshot() Snapshot {
-	return Snapshot{
+	snap := Snapshot{
 		RecallL1HitTotal:               m.recallL1Hit.Load(),
 		RecallL2HitTotal:               m.recallL2Hit.Load(),
 		RecallOriginTotal:              m.recallOrigin.Load(),
@@ -63,6 +200,34 @@ func (m *Metrics) Snapshot() Snapshot {
 		OutboxProjectionFailedTotal:    m.outboxFailed.Load(),
 		OutboxProjectionIgnoredTotal:   m.outboxIgnored.Load(),
 	}
+	m.mu.RLock()
+	snap.EmbeddingRequestTotal = copyBuckets(m.embeddingRequest)
+	snap.EmbeddingAppliedTotal = copyBuckets(m.embeddingApplied)
+	snap.EmbeddingTokensTotal = copyBuckets(m.embeddingTokens)
+	snap.EmbeddingCostTotal = copyBuckets(m.embeddingCost)
+	snap.MemoryStorageBytesTotal = copyBuckets(m.memoryStorageBytes)
+	snap.VectorStorageBytesTotal = copyBuckets(m.vectorStorageBytes)
+	snap.EpisodicDisabledTotal = copyBuckets(m.episodicDisabled)
+	snap.EpisodicDeletedTotal = copyBuckets(m.episodicDeleted)
+	snap.RecallReturnedTotal = copyBuckets(m.recallReturned)
+	snap.RecallSelectedTotal = copyBuckets(m.recallSelected)
+	m.mu.RUnlock()
+
+	m.traceDropSourceMu.RLock()
+	src := m.traceDropSource
+	m.traceDropSourceMu.RUnlock()
+	if src != nil {
+		snap.TraceDropped = src()
+	}
+	return snap
+}
+
+func copyBuckets(buckets map[string]*atomic.Uint64) map[string]uint64 {
+	out := make(map[string]uint64, len(buckets))
+	for k, v := range buckets {
+		out[k] = v.Load()
+	}
+	return out
 }
 
 func (m *Metrics) TraceEmitter() service.TraceEmitter {
@@ -85,7 +250,8 @@ func (m *Metrics) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		snap := m.Snapshot()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = fmt.Fprint(w, strings.Join([]string{
+
+		lines := []string{
 			fmt.Sprintf("recall_l1_hit_total %d", snap.RecallL1HitTotal),
 			fmt.Sprintf("recall_l2_hit_total %d", snap.RecallL2HitTotal),
 			fmt.Sprintf("recall_origin_total %d", snap.RecallOriginTotal),
@@ -96,8 +262,49 @@ func (m *Metrics) Handler() http.Handler {
 			fmt.Sprintf("outbox_projection_stale_total %d", snap.OutboxProjectionStaleTotal),
 			fmt.Sprintf("outbox_projection_failed_total %d", snap.OutboxProjectionFailedTotal),
 			fmt.Sprintf("outbox_projection_ignored_total %d", snap.OutboxProjectionIgnoredTotal),
-		}, "\n"))
+		}
+
+		// Per-bucket counter lines. Sorted keys keep the exposition stable for
+		// test assertions and scrape diffs.
+		lines = appendBucketLines(lines, "embedding_request_total", snap.EmbeddingRequestTotal)
+		lines = appendBucketLines(lines, "embedding_applied_total", snap.EmbeddingAppliedTotal)
+		lines = appendBucketLines(lines, "embedding_tokens_total", snap.EmbeddingTokensTotal)
+		lines = appendBucketLines(lines, "embedding_cost_total", snap.EmbeddingCostTotal)
+		lines = appendBucketLines(lines, "memory_storage_bytes_total", snap.MemoryStorageBytesTotal)
+		lines = appendBucketLines(lines, "vector_storage_bytes_total", snap.VectorStorageBytesTotal)
+		lines = appendBucketLines(lines, "episodic_disabled_total", snap.EpisodicDisabledTotal)
+		lines = appendBucketLines(lines, "episodic_deleted_total", snap.EpisodicDeletedTotal)
+		lines = appendBucketLines(lines, "recall_returned_total", snap.RecallReturnedTotal)
+		lines = appendBucketLines(lines, "recall_selected_total", snap.RecallSelectedTotal)
+
+		// trace_dropped_total is read straight from the sink (source of truth).
+		// The 3 reason values are bounded at compile time; always emit all
+		// three so dashboards see a stable label set even at zero.
+		lines = append(lines,
+			fmt.Sprintf(`trace_dropped_total{reason="buffer_full"} %d`, snap.TraceDropped.BufferFull),
+			fmt.Sprintf(`trace_dropped_total{reason="db_error"} %d`, snap.TraceDropped.DBError),
+			fmt.Sprintf(`trace_dropped_total{reason="shutdown"} %d`, snap.TraceDropped.Shutdown),
+		)
+
+		_, _ = fmt.Fprint(w, strings.Join(lines, "\n"))
 	})
+}
+
+// appendBucketLines emits one `<name>{tenant_bucket="<bucket>"} <value>` line
+// per bucket entry. Keys are sorted so output ordering is stable.
+func appendBucketLines(lines []string, name string, buckets map[string]uint64) []string {
+	if len(buckets) == 0 {
+		return lines
+	}
+	keys := make([]string, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf(`%s{tenant_bucket=%q} %d`, name, k, buckets[k]))
+	}
+	return lines
 }
 
 type traceMetricsEmitter struct {
