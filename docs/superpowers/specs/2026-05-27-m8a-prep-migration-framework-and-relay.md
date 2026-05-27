@@ -154,6 +154,23 @@ func NewRandomWorkerID() string { ... }
 
 `WorkerID` is opaque to the schema (column type `TEXT`). The relay records it on claim; uses it on ack.
 
+### 4.3a ClaimBatch SQL (v2.1 — explicit attempt_count increment)
+
+**(v2.1 fix — v2 had no ClaimBatch section; the SQL was implicit.)** ClaimBatch's UPDATE writes the lease state AND increments `attempt_count` atomically. This is the single mutation site for `attempt_count` (§4.9 invariant); Ack never touches it.
+
+```sql
+-- Inside ClaimBatch's outer tx, after the SELECT FOR UPDATE SKIP LOCKED:
+UPDATE <s.outboxTable()>
+   SET status           = 'processing',
+       claimed_by       = $workerID,
+       claimed_at       = NOW(),
+       lease_expires_at = NOW() + $leaseTTL,
+       attempt_count    = attempt_count + 1
+ WHERE outbox_id = ANY($rowIDs)
+```
+
+`MaxAttempts` gate (§4.4 Ack-fail branch) trips when this incremented value reaches the threshold AND the publish for *this* claim fails. A successful publish on the first claim leaves `attempt_count=1` durably on the `sent` row — informational, not actionable.
+
 ### 4.4 Ack with ownership predicate (CRITICAL FIX)
 
 **(v2 CRITICAL fix.)** v1's Ack UPDATE had no ownership check. v2:
@@ -452,3 +469,5 @@ How each of the 21 round-1 and round-2 findings landed:
 - **W-3.** Cross-tenant fairness (§4.10) is intentionally deferred. Operators running multi-tenant gateway deployments must monitor `recall_returned_total{tenant_bucket}` divergence under load; sustained tenant-X dominance is a signal that fairness needs to land.
 - **W-4.** The `dedupe_collapsed_loser_id` metadata key is a string convention. Future M8c work that lifts Metadata fields into typed Go fields should promote it. Acknowledged.
 - **W-5.** The 180s lease TTL is a safety margin; the real fix is M8b heartbeat. If embedder provider p99 grows past 90s for sustained periods, M8b's heartbeat must land before the next provider-degradation incident.
+- **W-6 (v2.1, from third-round review).** §6 notes M8b adds a SECOND relay consumer pool against the same outbox. Combined with §4.10's deferred tenant fairness, the M8b ship doubles the starvation surface area: two pools sharing a global FIFO under skewed tenant load is a known-bad pattern. If M8b ships before tenant fairness lands, the two-pool topology must be re-evaluated — either (a) the second pool subscribes only to events of a different aggregate_type filter, (b) per-pool tenant-bucket sharding ships alongside M8b, or (c) the fairness work itself is pulled forward.
+- **W-7 (v2.1, deferred to impl plan).** Third-round review flagged four MED items that don't block spec approval but must land as TDD assertions in the M8a-prep impl plan: (a) `NewRandomWorkerID()` hostname-failure fallback must be defined; (b) existing test fixtures must be audited for unknown EventType literals before §5.1's validateEventType ships; (c) `Release(ctx)` does NOT decrement attempt_count (by design — claims count for retry budget); (d) §3.5 fresh-DB bootstrap acceptance criterion needs an implementation contract stating `currentSchemaVersion` runs OUTSIDE the migration tx and `CREATE TABLE IF NOT EXISTS schema_version` provides the concurrency safety net. None of these are spec-shape concerns.
