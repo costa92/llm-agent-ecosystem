@@ -1,7 +1,7 @@
 # Memory Gateway API 契约草案
 
-> 文档版本：2026-05-25
-> 对应代码快照：2026-05-25
+> 文档版本：2026-05-27
+> 对应代码快照：2026-05-27
 > 范围：多服务 memory 架构中的 `Memory Gateway / API Service`
 > 关联文档：`multi-service-memory-architecture.zh-CN.md`
 
@@ -17,6 +17,12 @@ HTTP/JSON API 契约。
 - 为 `Agent Service` 提供统一的长期 memory 入口
 - 隐藏 `Postgres / Vector Index / Redis / Worker` 的内部实现细节
 - 把多租户、幂等、版本控制、删除语义、缓存一致性约束固化到接口层
+
+当前 gateway 实现侧补充约束：
+
+- recall candidate source 可以插拔，例如 lexical / vector / hybrid
+- 但 candidate source 只负责候选产生，不负责最终授权
+- 最终返回前必须回到真相源侧做 scope / deleted / disabled / version 过滤
 
 本草案不覆盖：
 
@@ -225,6 +231,7 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 
 - `strong` 时，Gateway 不得返回 stale result cache
 - `strong` 时，必要时可绕过 recall result cache 直接回源
+- `bounded` 命中 result cache 后，至少应校验 scope/invalidation 约束，以及 cached hit 的 version snapshot 仍未被真相源新版本覆盖
 
 ### 响应
 
@@ -478,6 +485,13 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 - 将 memory 从 recall 中隐藏
 - 不一定物理删除
 
+补充约束：
+
+- 若系统接入独立向量候选源，`disable` 后对应向量条目不应继续保留在候选集中
+- Gateway 当前实现应通过 outbox worker 等异步投影路径保证这一点：
+  - `disabled` 记录不会继续作为 recall 候选参与返回路径
+  - 最终返回前仍必须经过真相源侧 `disabled` 过滤
+
 ### 响应
 
 ```json
@@ -659,13 +673,96 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 
 - 显式续期长会话 working 生命周期
 
+### 请求
+
+```json
+{
+  "scope": {
+    "tenant_id": "tenant_a",
+    "user_id": "user_1",
+    "project_id": "proj_x",
+    "session_id": "sess_9"
+  }
+}
+```
+
+### 响应
+
+```json
+{
+  "session_id": "sess_9",
+  "status": "active"
+}
+```
+
+### 状态语义
+
+- `heartbeat` 只能刷新活跃会话时间，例如 `last_heartbeat_at`
+- `heartbeat` 不能复用 `closed_at` 之类的关闭语义字段
+- 已关闭会话必须返回 `403 forbidden`，不能被 heartbeat 重新打开
+- 超过 session idle TTL 的会话必须视为过期；默认值可取 `30m`
+- 对已过期会话的 recall / heartbeat 必须返回 `403`
+
 第一版若不想暴露 API，也至少应在调用协议或 SDK 里有等价语义。
 
 ---
 
-## 9. Read-Only 与降级语义
+## 9. Metrics API
 
-## 8.1 只读模式
+## 9.1 `GET /metrics`
+
+用途：
+
+- 暴露 gateway 进程内最小可用计数指标
+- 让调用方或运维侧快速确认 recall cache / outbox projection 的运行状态
+
+### 响应格式
+
+- `200 OK`
+- `Content-Type: text/plain; charset=utf-8`
+- 当前实现为简单文本计数器，每行一个 `name value`
+
+示例：
+
+```text
+recall_l1_hit_total 12
+recall_l2_hit_total 3
+recall_origin_total 8
+recall_stale_served_total 1
+recall_cache_fill_total 8
+recall_invalidation_total 5
+outbox_projection_projected_total 21
+outbox_projection_stale_total 2
+outbox_projection_failed_total 1
+outbox_projection_ignored_total 4
+```
+
+### 指标语义
+
+| 指标名 | 含义 |
+|---|---|
+| `recall_l1_hit_total` | `eventual` recall 命中 gateway L1 result cache 的次数 |
+| `recall_l2_hit_total` | `bounded` recall 命中通过 version 校验的缓存次数 |
+| `recall_origin_total` | recall 回源到 durable truth source 的次数 |
+| `recall_stale_served_total` | `allow_stale_cache=true` 时返回 stale recall cache 的次数 |
+| `recall_cache_fill_total` | recall 结果写入 gateway cache 的次数 |
+| `recall_invalidation_total` | 写入、管理、删除、session close 等操作触发 scope cache 失效的次数 |
+| `outbox_projection_projected_total` | outbox relay 成功完成向量投影的次数 |
+| `outbox_projection_stale_total` | outbox event 因 version fence 过期被判定为 stale 的次数 |
+| `outbox_projection_failed_total` | outbox 投影失败的次数 |
+| `outbox_projection_ignored_total` | outbox event 被显式忽略的次数 |
+
+### 当前约束
+
+- 指标为进程内原子计数器，进程重启后会清零
+- 当前只暴露计数，不包含 histogram / summary / label 维度
+- 当前实现不依赖第三方 metrics SDK
+
+---
+
+## 10. Read-Only 与降级语义
+
+## 10.1 只读模式
 
 当 Gateway 进入 `read_only_mode`：
 
@@ -683,7 +780,7 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 }
 ```
 
-## 8.2 Recall 降级
+## 10.2 Recall 降级
 
 当长期 recall 依赖故障时：
 
@@ -715,9 +812,9 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 
 ---
 
-## 10. 版本与幂等约束
+## 11. 版本与幂等约束
 
-## 9.1 `idempotency_key`
+## 11.1 `idempotency_key`
 
 所有写入请求必须携带 `idempotency_key`。
 
@@ -726,7 +823,7 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 - 同 key 同 payload：返回相同结果或语义等价结果
 - 同 key 不同 payload：返回 `409 idempotency_conflict`
 
-## 9.2 `expected_version`
+## 11.2 `expected_version`
 
 所有修改类请求建议携带 `expected_version`：
 
@@ -739,7 +836,7 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 
 ---
 
-## 11. 最小实现优先级
+## 12. 最小实现优先级
 
 第一批必须落地：
 
@@ -747,9 +844,11 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 2. `POST /memory/write`
 3. `PATCH /memory/items/{memory_id}`
 4. `POST /memory/items/{memory_id}/pin`
-5. `POST /memory/items/{memory_id}/disable`
-6. `DELETE /memory/items/{memory_id}`
-7. `POST /memory/sessions/{session_id}/close`
+5. `POST /memory/items/{memory_id}/unpin`
+6. `POST /memory/items/{memory_id}/disable`
+7. `POST /memory/items/{memory_id}/enable`
+8. `DELETE /memory/items/{memory_id}`
+9. `POST /memory/sessions/{session_id}/close`
 
 补充要求：
 

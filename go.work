@@ -5,6 +5,8 @@ use (
 	./llm-agent-customer-support
 	./llm-agent-flow
 	./llm-agent-memory
+	./llm-agent-memory-gateway
+	./llm-agent-memory-postgres
 	./llm-agent-otel
 	./llm-agent-providers
 	./llm-agent-rag
