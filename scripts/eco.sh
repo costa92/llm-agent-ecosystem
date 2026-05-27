@@ -11,6 +11,8 @@ all_repos=(
   llm-agent-customer-support
   llm-agent-flow
   llm-agent-memory
+  llm-agent-memory-gateway
+  llm-agent-memory-postgres
 )
 
 launchable_repos=(
@@ -27,6 +29,8 @@ repo_url() {
     llm-agent-customer-support) printf '%s\n' 'https://github.com/costa92/llm-agent-customer-support.git' ;;
     llm-agent-flow) printf '%s\n' 'https://github.com/costa92/llm-agent-flow.git' ;;
     llm-agent-memory) printf '%s\n' 'https://github.com/costa92/llm-agent-memory.git' ;;
+    llm-agent-memory-gateway) printf '%s\n' 'https://github.com/costa92/llm-agent-memory-gateway.git' ;;
+    llm-agent-memory-postgres) printf '%s\n' 'https://github.com/costa92/llm-agent-memory-postgres.git' ;;
     *) printf '%s\n' "" ;;
   esac
 }

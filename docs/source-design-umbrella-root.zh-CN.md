@@ -1,8 +1,8 @@
 # Umbrella Root 源码级设计说明
 
 > 仓库路径：`/home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/`
-> 文档版本：2026-05-21
-> 阅读对象：想搞清楚"为什么这里有 6 个子目录但根本身没有 `go.mod` 主模块"的开发者；进入跨仓 change 之前希望先理解 umbrella 协调机制的 reviewer / 运维。
+> 文档版本：2026-05-27
+> 阅读对象：想搞清楚"为什么这里有 9 个子目录但根本身没有 `go.mod` 主模块"的开发者；进入跨仓 change 之前希望先理解 umbrella 协调机制的 reviewer / 运维。
 > 文档约定：所有断言带 `file:line` 锚点。
 
 ---
@@ -29,7 +29,7 @@
 
 > Umbrella 根仓**是协调点，不是 monorepo**。它只持有：(a) 跨仓导航 + 文档；(b) 跨仓 CI 闸子；(c) 跨仓本地开发脚本；(d) 一个 stdlib-only Go 工具 `cmd/depcheck` 用来回答"该 bump 谁了"。它**不持有产品代码**，每个 sibling 仓库各有自己的 `go.mod` / SemVer / git tag / GitHub repo。
 
-证据：根目录只有 5 个文件 + 4 个目录（`README.md` / `PROJECT.md` / `Makefile` / `go.work` / `go.work.sum` + `cmd/` / `docs/` / `scripts/` / `.github/`）；6 个 sibling 各自是独立的 git clone（`scripts/eco.sh:6-13`）。
+证据：根目录只有 5 个文件 + 4 个目录（`README.md` / `PROJECT.md` / `Makefile` / `go.work` / `go.work.sum` + `cmd/` / `docs/` / `scripts/` / `.github/`）；9 个 sibling 各自是独立的 git clone（`scripts/eco.sh:6-16`）。
 
 ### 1.2 非目标（明示不做）
 
@@ -41,7 +41,7 @@
 | **不是统一构建系统** | 没有 Bazel / Nx / pants 这种"top-level build graph"。`make build` 只是 `cd <repo> && go build ./...` 的薄 fan-out。 |
 | **不持有 K8s / Helm / 部署清单** | 整个生态的常驻非目标（`README.md:80-82`）。部署样板在 `llm-agent-customer-support/compose/`，是 docker-compose，不是 K8s。 |
 | **不持有产品代码** | `cmd/depcheck` 是**唯一**位于 umbrella 的 Go 程序，且仅服务于 CI 与运维。 |
-| **不持有 sibling 仓库源码副本** | `make bootstrap` 实时 git clone 6 个独立 repo（`scripts/eco.sh:18-30, 59-76`）。 |
+| **不持有 sibling 仓库源码副本** | `make bootstrap` 实时 git clone 9 个独立 repo（`scripts/eco.sh:20-32, 59-78`）。 |
 | **不解决跨仓 SemVer 冲突** | sibling 仓库各自选 tag；冲突由 PR review + `depcheck` 报 stale + 手动 re-tag wave 解决（§8）。 |
 
 ### 1.3 为什么不是 monorepo（设计哲学）
@@ -74,21 +74,24 @@ llm-agent-ecosystem/
 ├── docs/                            # 生态级文档（中英、源码级深读、roadmap、本文档）
 ├── scripts/
 │   ├── eco.sh                       # 多仓 bootstrap/pull/status/build/test/up/down
-│   ├── workspace.sh                 # 写 go.work 把 6 个 sibling 串成 workspace
+│   ├── workspace.sh                 # 写 go.work 把 9 个 sibling 串成 workspace
 │   └── stdlib-only-check.sh         # B4 闸子实现（核心 stdlib-only 三项断言）
 ├── .github/
 │   └── workflows/
 │       └── umbrella.yml             # 4 个 job：cross-repo-build / smoke / stdlib-only / depcheck artifact
 ├── .planning/                       # umbrella 自己的 phase/roadmap（若有）
-├── llm-agent/                       # ↓ 以下是 6 个 sibling 仓库（git clone 实时存在）
+├── llm-agent/                       # ↓ 以下是 9 个 sibling 仓库（git clone 实时存在）
 ├── llm-agent-rag/
 ├── llm-agent-otel/
 ├── llm-agent-providers/
 ├── llm-agent-flow/
-└── llm-agent-customer-support/
+├── llm-agent-customer-support/
+├── llm-agent-memory/
+├── llm-agent-memory-postgres/
+└── llm-agent-memory-gateway/
 ```
 
-`flow/` 目录在历史快照里曾经出现过，是 git status 在 phase 转移期遗留的旧名（`PROJECT.md` 只列了 5 个 sibling，未含 flow）；当前 canonical roster 以 `cmd/depcheck/main.go:32-39` 与 `README.md:31-39` 为准（6 个，含 flow）。
+`flow/` 目录在历史快照里曾经出现过，是 git status 在 phase 转移期遗留的旧名（`PROJECT.md` 只列了 5 个 sibling，未含 flow）；当前 canonical roster 以 `cmd/depcheck/main.go:28-39` 与 `README.md` 的 subprojects / roster 为准（9 个，含 flow 与 memory split modules）。
 
 ### 2.2 每个一级目录的角色
 
@@ -99,7 +102,7 @@ llm-agent-ecosystem/
 | `scripts/` | bash | 多仓操作 + workspace + stdlib 检查的脚本实现 | 是 — Makefile 转发 + B4 调用 |
 | `.github/workflows/` | YAML | umbrella 自己的 CI 流水（B2 / B3 / B4 + cross-repo-build） | 是 — GitHub Actions runner |
 | `.planning/` | Markdown | umbrella 级别的 phase/roadmap/STATE（若存在） | 否 — 人类阅读 + AI 工作流引用 |
-| `llm-agent/` 等 6 sibling | git clone | 子仓代码（不属于 umbrella；通过 `make bootstrap` 拉取） | 是 — CI 在 umbrella job 内 checkout 各 sibling |
+| `llm-agent/` 等 9 sibling | git clone | 子仓代码（不属于 umbrella；通过 `make bootstrap` 拉取） | 是 — CI 在 umbrella job 内 checkout 各 sibling |
 
 注意：6 个 sibling 目录**不应该**被 commit 到 umbrella 仓 — 它们由 `make bootstrap` 实时 clone（`scripts/eco.sh:59-76` `bootstrap_repo` 函数）。
 
@@ -115,7 +118,7 @@ llm-agent-ecosystem/
 |---|---|---|
 | `help` | 输出 8 行说明 | 默认 target；纯文本帮助。 |
 | `bootstrap` | `./scripts/eco.sh bootstrap $(TARGETS)` | 从 GitHub clone 缺失的 sibling 仓库。 |
-| `workspace` | `./scripts/workspace.sh` | 写 `<root>/go.work` 把 6 sibling 接入本地 workspace。 |
+| `workspace` | `./scripts/workspace.sh` | 写 `<root>/go.work` 把 9 sibling 接入本地 workspace。 |
 | `pull` | `./scripts/eco.sh pull $(TARGETS)` | 对每个 sibling 跑 `git pull --ff-only`；缺失则 clone。 |
 | `status` | `./scripts/eco.sh status $(TARGETS)` | 对每个 sibling 跑 `git status -sb`。 |
 | `build` | `./scripts/eco.sh build $(TARGETS)` | 对每个 sibling 跑 `GOWORK=off go build ./...`。 |
@@ -125,7 +128,7 @@ llm-agent-ecosystem/
 
 ### 3.2 `TARGETS=...` 用法
 
-`Makefile:3` 默认 `TARGETS ?= all`。`scripts/eco.sh:39-49` `normalize_targets` 函数把 `all` 展开为完整 6 sibling list，否则按 `,` 拆分。例：
+`Makefile:3` 默认 `TARGETS ?= all`。`scripts/eco.sh:43-53` `normalize_targets` 函数把 `all` 展开为完整 sibling list，否则按 `,` 拆分。例：
 
 ```bash
 make build TARGETS=llm-agent,llm-agent-rag       # 只 build 这两个
@@ -136,7 +139,7 @@ make test                                          # 等价 TARGETS=all
 
 ### 3.3 launchable vs library-only
 
-`scripts/eco.sh:15-18, 32-37` 显式声明 `launchable_repos = (llm-agent-otel, llm-agent-customer-support)`：只有这两个有 `compose/compose.yaml`，可以 `make up`。其它 4 sibling 是 library-only — `make build` / `make test` 跑得了，但 `make up` 会因 `is_launchable` 返回 false 而拒绝（`scripts/eco.sh:158-167`）。
+`scripts/eco.sh:18-21, 36-41` 显式声明 `launchable_repos = (llm-agent-otel, llm-agent-customer-support)`：只有这两个有 `compose/compose.yaml`，可以 `make up`。其它 7 sibling 是 library-only — `make build` / `make test` 跑得了，但 `make up` 会因 `is_launchable` 返回 false 而拒绝（`scripts/eco.sh:161-170`）。
 
 ### 3.4 端口分配（避免 demo 共存冲突）
 
@@ -228,7 +231,7 @@ GOWORK=off go run . --root /custom/path  # 显式 root
 
 ### 5.1 `go.work` 在 umbrella 的角色
 
-`scripts/workspace.sh:1-23` 写一个 `<root>/go.work` 把所有 6 sibling 的本地 path 接入同一个 Go workspace。这样：
+`scripts/workspace.sh:1-23` 写一个 `<root>/go.work` 把所有 9 sibling 的本地 path 接入同一个 Go workspace。这样：
 
 - 在 `llm-agent-providers/` 修改一行代码，`llm-agent-customer-support/` 立即 build 时用本地修改后的版本，无需 `replace`。
 - 任意 `go test` 跨多个 sibling 的测试可以 stitch 起来跑。

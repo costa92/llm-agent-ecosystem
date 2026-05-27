@@ -36,6 +36,9 @@ var repoList = []string{
 	"llm-agent-providers",
 	"llm-agent-customer-support",
 	"llm-agent-flow",
+	"llm-agent-memory",
+	"llm-agent-memory-gateway",
+	"llm-agent-memory-postgres",
 }
 
 // modulePrefix is the org path. Any require line under this prefix is

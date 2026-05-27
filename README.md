@@ -23,7 +23,10 @@ llm-agent-ecosystem/
 ├── llm-agent-otel/                  # capability-preserving OpenTelemetry wrappers
 ├── llm-agent-providers/             # OpenAI / Anthropic / Ollama / DeepSeek / MiniMax adapters
 ├── llm-agent-customer-support/      # demo customer-support reference service
-└── llm-agent-flow/                  # serializable flow IR + DAG executor (v0.0.x)
+├── llm-agent-flow/                  # serializable flow IR + DAG executor (v0.1.x stable)
+├── llm-agent-memory/                # SDK-only durable memory abstractions and manager surface
+├── llm-agent-memory-postgres/       # Postgres durable backend + transactional outbox relay
+└── llm-agent-memory-gateway/        # HTTP gateway, recall cache, session lifecycle, metrics
 ```
 
 ## Repository roster
@@ -36,6 +39,9 @@ llm-agent-ecosystem/
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.4** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
 | `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.4** | `main` | <https://github.com/costa92/llm-agent-flow> |
+| `llm-agent-memory` | SDK-only memory package and stable durable abstractions | **v1.0.0** | `main` | <https://github.com/costa92/llm-agent-memory> |
+| `llm-agent-memory-postgres` | concrete Postgres memory backend, migrations, and outbox relay | **unreleased** | `main` | <https://github.com/costa92/llm-agent-memory-postgres> |
+| `llm-agent-memory-gateway` | HTTP memory gateway, recall cache, session state, and metrics | **unreleased** | `main` | <https://github.com/costa92/llm-agent-memory-gateway> |
 
 Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow`
 introduced 2026-05-21 (v0.0.1 walking skeleton → v0.0.2 per-layer
@@ -130,6 +136,9 @@ llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-ote
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag + llm-agent-flow
 llm-agent-providers         ──depends on──▶  llm-agent
 llm-agent-flow              ──depends on──▶  llm-agent
+llm-agent-memory            ──depends on──▶  (SDK-only durable abstractions; no sibling back-edges)
+llm-agent-memory-postgres   ──depends on──▶  llm-agent-memory
+llm-agent-memory-gateway    ──depends on──▶  llm-agent-memory + llm-agent-memory-postgres + llm-agent-rag
 llm-agent                   ──depends on──▶  (nothing — stdlib only, zero third-party requires)
 llm-agent-rag               ──depends on──▶  (stdlib only at v1.0.0; `postgres` subpackage may pull pgx)
 ```
