@@ -158,7 +158,7 @@ Milestones are linearly ordered; each builds only on its predecessors. Every mil
 | Independently shippable | Yes — gateway-only code changes plus one new Postgres migration (`memory_decision_trace` table). No new sibling module. |
 | Exit criteria | 1. `memory_decision_trace` table migrated in `llm-agent-memory-postgres`. 2. Gateway-internal `DecisionTraceSink` interface + Postgres impl in `llm-agent-memory-gateway/internal/service/`. 3. Sink is best-effort async with bounded channel and a `trace_dropped_total` loss counter. 4. Every existing `TraceEmitter.Emit` call site mirrors to `DecisionTraceSink.Record`; existing log emission preserved. 5. 10 counters emitted via the existing gateway `internal/observability/metrics.go` exporter — 6 Cost (`embedding_request/applied/tokens/cost_total`, `memory/vector_storage_bytes_total`), 2 Lifecycle (`episodic_disabled_total`, `episodic_deleted_total`), 2 Recall (`recall_returned_total`, `recall_selected_total`). 6. Storage-bytes cron goroutine in gateway, configurable interval (default 5 min). 7. Cardinality rule: only `tenant_bucket` allowed as label across all 10 counters. 8. Cross-tenant isolation test: a forged `tenant_id` cannot read/write trace rows across boundary. 9. **No SDK changes.** **No** new event types. **No** new sibling module. |
 | Complexity | M |
-| Detailed plan file | `docs/superpowers/plans/2026-10-XX-m7-validation-telemetry-and-trace.md` |
+| Detailed plan file | `docs/superpowers/plans/2026-05-27-m7-validation-telemetry-and-trace.md` |
 
 ### M8 — Phase E v2 Breaking: Storage Refactor + Working Tier + Consolidation Worker + Full Validation Set
 
