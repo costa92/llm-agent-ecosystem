@@ -86,16 +86,16 @@ func TestMigrate_DecisionTraceIndexes(t *testing.T)     { /* idx_trace_tenant_ti
 func TestMigrate_DecisionTraceIdempotent(t *testing.T)   { /* second Migrate is a no-op */ }
 ```
 
-Tests gate on `pgtestdb` (existing helper) — if the integration harness pattern uses build tags, follow the existing pattern in `schema_test.go`.
+Tests follow the existing pattern in `schema_test.go`: call `openTestPool(t, ctx)` which `t.Skipf`s when `LLM_AGENT_MEMORY_PG_URL` is unset. Use a unique `TablePrefix` per test (e.g. `m7_<nanos>_trace`) so parallel runs don't collide. No build tags involved.
 
 - [ ] **Step 2: Run tests, verify they fail**
 
 ```bash
 cd /home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/llm-agent-memory-postgres
-GOWORK=off GOCACHE=/tmp/go-build go test ./postgres -tags=integration -run 'TestMigrate_DecisionTrace' -count=1
+GOWORK=off GOCACHE=/tmp/go-build go test ./postgres -run 'TestMigrate_DecisionTrace' -count=1
 ```
 
-Expected: failure (table does not exist).
+Expected without `LLM_AGENT_MEMORY_PG_URL` set: test skips (existing harness behavior). To verify failure locally, export a Postgres URL first (`export LLM_AGENT_MEMORY_PG_URL=postgres://...`). CI runs with the URL set and catches real failures.
 
 - [ ] **Step 3: Implement the migration**
 
@@ -709,7 +709,7 @@ GOWORK=off GOCACHE=/tmp/go-build go test ./... -count=1
 
 cd /home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/llm-agent-memory-postgres
 GOWORK=off GOCACHE=/tmp/go-build go test ./... -count=1
-GOWORK=off GOCACHE=/tmp/go-build go test ./... -tags=integration -count=1   # only if a live Postgres is available
+GOWORK=off GOCACHE=/tmp/go-build LLM_AGENT_MEMORY_PG_URL=$PG_URL go test ./... -count=1   # only if a live Postgres is available; export the URL first
 ```
 
 Expected: all pass.
