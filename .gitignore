@@ -1,5 +1,6 @@
 /.agents/
 /.codex/
+/.context/
 /llm-agent/
 /llm-agent-rag/
 /llm-agent-otel/
