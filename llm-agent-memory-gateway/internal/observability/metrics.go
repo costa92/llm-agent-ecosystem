@@ -353,6 +353,16 @@ func (o recallMetricsObserver) ObserveRecall(_ context.Context, obs service.Reca
 	if obs.StaleServed {
 		o.metrics.AddRecallStaleServed()
 	}
+
+	// returned/selected validation counters. Bucket the tenant_id at the call
+	// site (Open Decisions / Cardinality). Zero counts skip the increment so
+	// zero-hit recalls do not allocate a bucket entry.
+	if obs.Returned > 0 {
+		o.metrics.AddRecallReturned(service.TenantBucket(obs.TenantID), uint64(obs.Returned))
+	}
+	if obs.Selected > 0 {
+		o.metrics.AddRecallSelected(service.TenantBucket(obs.TenantID), uint64(obs.Selected))
+	}
 }
 
 type outboxMetricsObserver struct {

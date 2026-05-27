@@ -275,6 +275,85 @@ func TestMetrics_HandlerExposes_RecallSelected(t *testing.T) {
 	}
 }
 
+// ---- recall returned/selected counters (Task 9) ----
+
+func TestRecallObserver_ReturnedIncrementsRecallReturned(t *testing.T) {
+	m := NewMetrics()
+	observer := m.RecallObserver()
+	observer.ObserveRecall(context.Background(), service.RecallObservation{
+		CacheLevel: "origin",
+		TenantID:   "tenant-a",
+		Returned:   7,
+		Selected:   5,
+	})
+
+	bucket := service.TenantBucket("tenant-a")
+	snap := m.Snapshot()
+	if got := snap.RecallReturnedTotal[bucket]; got != 7 {
+		t.Fatalf("recall_returned[%s] = %d, want 7", bucket, got)
+	}
+}
+
+func TestRecallObserver_SelectedIncrementsRecallSelected(t *testing.T) {
+	m := NewMetrics()
+	observer := m.RecallObserver()
+	observer.ObserveRecall(context.Background(), service.RecallObservation{
+		CacheLevel: "origin",
+		TenantID:   "tenant-b",
+		Returned:   7,
+		Selected:   5,
+	})
+
+	bucket := service.TenantBucket("tenant-b")
+	snap := m.Snapshot()
+	if got := snap.RecallSelectedTotal[bucket]; got != 5 {
+		t.Fatalf("recall_selected[%s] = %d, want 5", bucket, got)
+	}
+}
+
+func TestRecallObserver_ZeroHitsIncrementsNeitherCounter(t *testing.T) {
+	m := NewMetrics()
+	observer := m.RecallObserver()
+	observer.ObserveRecall(context.Background(), service.RecallObservation{
+		CacheLevel: "origin",
+		TenantID:   "tenant-c",
+		Returned:   0,
+		Selected:   0,
+	})
+
+	snap := m.Snapshot()
+	if len(snap.RecallReturnedTotal) != 0 {
+		t.Fatalf("recall_returned should be empty on zero-hit recall: %+v", snap.RecallReturnedTotal)
+	}
+	if len(snap.RecallSelectedTotal) != 0 {
+		t.Fatalf("recall_selected should be empty on zero-hit recall: %+v", snap.RecallSelectedTotal)
+	}
+}
+
+func TestRecallObserver_BucketsByTenantID(t *testing.T) {
+	m := NewMetrics()
+	observer := m.RecallObserver()
+	observer.ObserveRecall(context.Background(), service.RecallObservation{
+		CacheLevel: "origin",
+		TenantID:   "tenant-d",
+		Returned:   3,
+		Selected:   2,
+	})
+
+	bucket := service.TenantBucket("tenant-d")
+	snap := m.Snapshot()
+	if got := snap.RecallReturnedTotal[bucket]; got != 3 {
+		t.Fatalf("recall_returned[%s] = %d, want 3", bucket, got)
+	}
+	if got := snap.RecallSelectedTotal[bucket]; got != 2 {
+		t.Fatalf("recall_selected[%s] = %d, want 2", bucket, got)
+	}
+	// Confirm the raw tenant_id is not used as a label.
+	if _, present := snap.RecallReturnedTotal["tenant-d"]; present {
+		t.Fatalf("raw tenant_id leaked into recall_returned labels")
+	}
+}
+
 // ---- outbox lifecycle counters (Task 8) ----
 
 func TestOutboxObserver_DisabledIncrementsEpisodicDisabled(t *testing.T) {

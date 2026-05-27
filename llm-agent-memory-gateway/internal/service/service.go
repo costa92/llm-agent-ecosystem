@@ -148,6 +148,9 @@ func (s *Service) RecallUnified(ctx context.Context, authScope authz.Scope, req 
 				ConsistencyLevel: consistencyLevel,
 				CacheLevel:       cacheLevel,
 				StaleServed:      staleServed,
+				TenantID:         scope.TenantID,
+				// Returned/Selected intentionally zero on cache-hit paths —
+				// no fresh recall was performed.
 			})
 			return cached, nil
 		}
@@ -166,11 +169,6 @@ recallOrigin:
 		"tenant_id": scope.TenantID,
 		"user_id":   scope.UserID,
 		"count":     len(records),
-	})
-	s.recallObserver.ObserveRecall(ctx, RecallObservation{
-		ConsistencyLevel: consistencyLevel,
-		CacheLevel:       "origin",
-		StaleServed:      false,
 	})
 
 	response := httpapi.RecallUnifiedResponse{
@@ -211,6 +209,18 @@ recallOrigin:
 			"token_cost_estimate": estimate,
 		})
 	}
+
+	// Observe after post-budget filtering so Returned/Selected carry the
+	// pre- and post-filter counts. Cache-hit paths above leave these zero,
+	// which the metrics observer treats as a no-op.
+	s.recallObserver.ObserveRecall(ctx, RecallObservation{
+		ConsistencyLevel: consistencyLevel,
+		CacheLevel:       "origin",
+		StaleServed:      false,
+		TenantID:         scope.TenantID,
+		Returned:         len(records),
+		Selected:         len(response.Hits),
+	})
 
 	s.traceEmitter.Emit(ctx, "promote_decided", map[string]any{
 		"session_id": scope.SessionID,
