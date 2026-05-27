@@ -1,277 +1,370 @@
-# M8 Umbrella Design — Sub-Milestone Split
+# M8 Umbrella Design — Sub-Milestone Split (v2)
 
 > Date: 2026-05-27
-> Status: M8-shaping spec. M8 in the current roadmap absorbs (a) the original Phase E v2-breaking work and (b) the substrate that M7 had to defer (Working tier, atomic promotion API, dedupe primitive, typed RecallObserver, Consolidation Worker, remaining 12 validation counters, relay delivery hardening, reason-enum freeze). The roadmap already calls M8 XL and notes "will be split into ≥3 sub-PRs." This spec locks the split into named sub-milestones, fixes the highest-impact cross-cutting decisions, and hands off per-sub-milestone detail to follow-on specs.
-> Companion to: `docs/superpowers/plans/2026-05-25-llm-agent-memory-roadmap.md` (§M8 row to be amended), `docs/superpowers/specs/2026-05-27-m7-workers-and-validation-design.md` (§13 — what was deferred and why).
+> Status: **revised after two-round review.** v1 of this spec went through Plan-type internal review (14 findings) and Codex CLI consult (6 additional findings). Both reviewers verdict: "needs another umbrella pass." This v2 addresses all 20 findings — most importantly the live-write rollout discovery (current gateway emits `kind` verbatim, schema rejects anything outside `('episodic','semantic')`, so M8a is NOT additive without an expand-first migration), the dead `WHERE kind IS NULL` back-fill (`kind` is `NOT NULL`), the missing `memory_promoted` event commitment from M7, and the codex-recommended `Promoter` / `Deduper` interface-extension pattern that avoids breaking existing `RecordStore` mocks.
+> Companion to: `docs/superpowers/plans/2026-05-25-llm-agent-memory-roadmap.md` (§M8 row to be amended again), `docs/superpowers/specs/2026-05-27-m7-workers-and-validation-design.md` (§13 — what was deferred and why), `docs/m7-staging-observability.md` (data source for §4.7 reason-enum freeze trigger).
 
 ## 1. Goal
 
-Three deliverables from this umbrella spec:
+Three deliverables from this umbrella:
 
-1. **Define the sub-milestones** (M8a / M8b / M8c / M8d) with sharp dependency edges and one-PR-each rule.
-2. **Lock the cross-cutting decisions** that any sub-milestone would have to revisit otherwise — Working-tier schema representation, scoredStore relocation, atomic-promotion API shape, LastAccessAt write path strategy, reason-enum freeze process.
-3. **Hand off** per-sub-milestone detail to follow-on specs. This umbrella does NOT enumerate task-level changes, doc-level wording, or exit-criteria checklists for each sub-milestone — those go into their own spec at sub-milestone kick-off.
+1. **Sub-milestone split**: M8a-prep → M8a → (M8b ∥ M8c) → M8d. The v1 spec was missing M8a-prep; without it, M8a's substrate changes break live writes.
+2. **Cross-cutting decisions locked at umbrella level** so they don't get re-fought per sub-milestone — Working-tier migration shape, atomic-promotion interface boundary, dedupe primitive contract (with loser-resolution semantics, fixed in v2), LastAccessAt write path, scoredStore lift scope (corrected upward in v2 from "one file" to "package cluster"), reason-enum freeze readiness, relay hardening placement (moved earlier in v2).
+3. **Hand-off**: per-sub-milestone spec writing comes next. Each sub-spec runs through the same two-round review pattern before its implementation plan is written.
 
-What this spec does **not** do:
+## 2. Verified Codebase Facts (re-verified during v2 review)
 
-- It does not write any code or migration.
-- It does not pick a vector backend, queue runtime, or specific Prometheus exporter (per-sub-milestone decisions).
-- It does not order the sub-milestones in calendar time. The dependency edges below establish *what must precede what*, not *when*.
-- It does not commit to a v2.0.0 ship date. M8a alone may or may not warrant a release tag — that's a decision at sub-milestone close.
-
-## 2. Verified Codebase Facts (Re-Reading the Substrate, May 2026)
-
-Spec claims here are grounded in code as of commits up to `b182c95` on `main`.
+Spec claims here are grounded in code at `b182c95` on `main`. Items marked **(v2 correction)** were wrong in v1.
 
 ### 2.1 Schema today (`llm-agent-memory-postgres/postgres/schema.go`)
 
 `memory_record` already has:
 
-- `kind TEXT NOT NULL CHECK (kind IN ('episodic', 'semantic'))` — **no `working` value** today.
-- `last_access_at TIMESTAMPTZ` — **column exists**, but no mutation SQL writes it.
-- `hit_count BIGINT NOT NULL DEFAULT 0` — **column exists**, never incremented.
-- `consolidated_from_event_id TEXT` — **column exists**, never populated.
-- `source TEXT NOT NULL CHECK (source IN ('user_saved', 'agent_inferred', 'system'))` — typed column. M7's flawed spec section that read `r.Metadata["source"]` was reading from the wrong place; the field is `MemoryRecord.Source` (line 18 of `durable.go`).
+- `kind TEXT NOT NULL CHECK (kind IN ('episodic', 'semantic'))` — **(v2 correction)** `kind` is `NOT NULL`. The v1 spec's `UPDATE memory_record SET kind='episodic' WHERE kind IS NULL` was dead code; this is now addressed in §4.1.
+- `last_access_at`, `hit_count`, `consolidated_from_event_id` — columns exist; mutation SQL never writes them.
+- `source` CHECK is `('user_saved', 'agent_inferred', 'system')` — three sources, not two. M8a's promote rules act on `source`, not on a hypothetical Metadata field.
 
-**Implication:** Working-tier introduction does NOT need new columns. Three of the columns the Consolidation Worker needs already exist. The §M7 deferred work is *less* schema-breaking than the original roadmap row implied.
+### 2.2 Migration framework (`schema.go:8-63`)
 
-### 2.2 SDK contracts (`llm-agent-memory/memory/durable.go`)
+`SchemaVersion` is a single integer. `Migrate()` runs `migrationStatements()` as one flat list, once. **There is no concept of stage / phase / dual-write / contract.** **(v2 correction)** v1 assumed staged migrations were possible without saying so. M8a-prep now makes this explicit.
 
-`RecordStore` exposes single-record operations only: `WriteRecord`, `PatchRecord`, `DeleteRecord`, `PinRecord`, `DisableRecord`, `GetRecord`. There is no transactional unit-of-work primitive. `EventStore.AppendEvent` and `Outbox.EnqueueOutbox` are separate interfaces (codex C-3 finding).
+### 2.3 Write path (`store.go:32-160` + gateway `service.go:240-340`)
 
-**Implication:** atomic promotion across record-state + event + outbox CANNOT be expressed by composing existing SDK methods. M8 must add a primitive.
+`WriteRecord` accepts `record.Kind` from the caller and inserts verbatim (`store.go:70`). Gateway passes the caller's claimed kind through without normalization (`service.go:269,278`). **Implication: if any caller sets `kind="working"` before the schema accepts that value, the write fails. M8a is NOT additive without an expand-first migration.**
 
-### 2.3 scoredStore lives in core, not in the sibling (`llm-agent/memory/internal_score.go`)
+### 2.4 SDK contracts (`durable.go:132-156`)
 
-The shared in-memory engine for Working / Episodic / Semantic is `scoredStore` in the `llm-agent/memory/` core module — line 19, single `sync.Mutex`. The sibling `llm-agent-memory` imports core types and wraps with scoped-lifecycle, but does NOT have its own scoredStore.
+`RecordStore` has 6 methods. `EventStore.AppendEvent` and `Outbox.EnqueueOutbox` are separate. No transactional unit-of-work primitive. **The only `RecordStore` implementer in the workspace is `postgres.Store`** (3 test fakes in gateway tests are the only other "implementers"). Local `go.mod` `replace` directives hide what published downstream consumers see — they pin `llm-agent-memory v1.0.0`, so any interface-level change is a real break for them.
 
-**Implication:** Phase E's "scoredStore concurrency refactor" cannot land in the sibling without first **lifting** scoredStore out of core. Per the roadmap §1.3 deprecation policy ("M8 deprecation announced" for core), the lift is the right move regardless — the refactor work goes into the sibling, and core gets a deprecation patch.
+### 2.5 scoredStore in core (`llm-agent/memory/internal_score.go` + dependencies)
 
-### 2.4 Relay delivery (`llm-agent-memory-postgres/postgres/relay.go`)
+Single `sync.Mutex`. **(v2 correction — lift scope was under-claimed in v1.)** `WorkingMemory` (`working.go:48,77,95,121`) and `persistence.go` (`:79,105`) bind `*scoredStore` directly. Sibling `consolidator_test.go:94` and `testutil_test.go:54` depend on core export/import round-trip. The `MemoryItem` type (`memory.go:25-30`), `Kind` enum, `Stats`, and `Memory` interface all live in core and are imported by the sibling. A lift requires moving 5+ files plus updating ≥6 sibling imports.
 
-`RunOnce` claims a batch under one outer transaction, calls `Publisher.Publish` per row inside the tx, marks rows `sent` only at commit time. Failures re-queue to `pending` (no `failed` state, no dead-letter). Codex C-1: a mid-batch hang/crash replays the entire processed prefix.
+**No benchmark harness exists in `llm-agent/memory/`.** `rg '^func Benchmark'` returns zero. M8c's "≥2× throughput improvement" claim has no baseline measurement infrastructure.
 
-**Implication:** M8 must harden delivery semantics before the Consolidation Worker can be safely written on top of it. Either per-row tx or durable `processing` state with lease/heartbeat.
+### 2.6 Relay delivery (`relay.go` + `store.go:23`)
 
-### 2.5 Validation telemetry (`llm-agent-memory-gateway/internal/observability/metrics.go`, post-M7)
+Batch-tx ack model (codex C-1 from M7 review). **The `outboxStatusProcessing` constant exists (`store.go:23`) but is dead code — the relay never writes that status.** The substrate for "durable processing state with lease" is half-built. M8a-prep can wire it up without a new column.
 
-Gateway exporter already supports per-tenant_bucket counters with thread-safe per-bucket maps. M7 landed 10 validation counters + `trace_dropped_total` + `storage_cron_failures_total`. The infrastructure for the deferred 12 counters exists; only the counter declarations and emission call sites need to be added.
+### 2.7 Event-type allowlist coupling (`outbox_vector_publisher.go:31`)
 
-**Implication:** the M8 "remaining 12 counters" work is mostly emit-call-site work, not exporter-infra work. Smaller than the original roadmap row suggests.
+The vector projector's outbox consumer dispatches on `EventType` and ignores unknown values. New event types (`memory_promoted`, `memory_dedupe_collapsed`) emitted without a paired allowlist update get silently dropped from the vector index path.
 
-## 3. Sub-Milestone Split
-
-Four sub-milestones. Dependency edges are strict.
+## 3. Sub-Milestone Split (v2 — adds M8a-prep)
 
 ```
+M8a-prep (infrastructure: enables everything else)
+    ├── upgrade migration framework to support staged transitions
+    ├── relay delivery hardening (write `processing` state, per-row ack)
+    └── event-type allowlist extension for `memory_promoted` and `memory_dedupe_collapsed`
+    ↓
 M8a (substrate)
-    ├── adds Working tier (extends `kind` CHECK constraint, no new column)
-    ├── adds atomic promotion API (RecordStore.PromoteRecord — see §4.2)
-    ├── adds LastAccessAt write path on recall (small mutation already-existing columns)
-    └── adds dedupe primitive (RecordStore.ResolveDedupe — see §4.3)
+    ├── Working-tier rollout (expand-first; see §4.1 — 4 phases)
+    ├── Promoter interface + Postgres impl (see §4.2 — separate interface, not RecordStore method)
+    ├── Deduper interface + Postgres impl + memory_dedupe_index table + loser-resolution semantics (see §4.3)
+    └── LastAccessAt batched write path (see §4.4)
+    ↓ (after M8a's migration phases reach "kind='working' accepted by schema")
+M8b (Consolidation Worker)              M8c (Phase E storage refactor)
+    ├── new sibling llm-agent-memory-worker  ├── benchmark harness FIRST
+    ├── consumes outbox via MessagePublisher ├── package-cluster lift (5+ files; see §4.5)
+    ├── promotes via Promoter interface      ├── concurrency refactor (RWMutex / CoW / shard — picked by benchmark)
+    ├── dedupes via Deduper interface        ├── VectorBackend pluggability
+    └── adds 5 Promote + 4 Working-lifecycle counters   └── snapshot v1→v2 + Metadata→typed-field lift
+    M8b and M8c are orthogonal at the schema level after M8a;
+    cross-coupling around `*scoredStore` is now M8c-internal only.
     ↓
-M8b (worker)
-    ├── new `llm-agent-memory-worker` sibling
-    ├── consumes outbox via existing MessagePublisher seam
-    ├── promotes Working→Episodic using M8a primitives
-    └── adds the 5 Promote-class + 4 Working-lifecycle counters that depend on it
-M8b in parallel with M8c.
-    ↓
-M8c (Phase E storage refactor)
-    ├── lifts scoredStore out of `llm-agent/memory/internal_score.go` into the sibling
-    ├── refactors concurrency (RWMutex / CoW / shard-by-kind — locked in M8c spec)
-    ├── introduces pluggable VectorBackend (pgvector first wiring)
-    ├── lifts Source / Category / Pinned / Disabled / Scope out of Metadata to typed Go fields
-    └── snapshot v1→v2 migration
-M8c is orthogonal to M8a/M8b at the schema level — no shared touch points.
-    ↓
-M8d (typed observer + remaining telemetry + reason-enum freeze)
-    ├── extends RecallObserver with memory_id / request_id / reason (DEPENDS on M8a's promote API for the `was_promoted` flag)
-    ├── adds the 3 Recall-class deferred counters (recall_dropped_total reason-bucketed, recall_helpful_total, recall_unhelpful_total) + feedback ingest endpoint
-    ├── adds `memory_stale_hit_total` (DEPENDS on M8b worker version-fence)
-    ├── relay delivery hardening (codex C-1) — DEPENDS on M8b being live so the contract is testable
-    └── freezes the §13.4 reason enum at the SDK boundary; migrates existing M7 free-form trace rows
+M8d (typed observer + reason-enum freeze)
+    ├── extend RecallObservation with memory_id / request_id / reason / was_promoted
+    ├── emit the 3 deferred Recall counters + feedback ingest endpoint
+    ├── emit `memory_stale_hit_total` (depends on M8b worker version-fence)
+    └── freeze §13.4 reason enum + migrate existing M7 free-form trace rows
 ```
 
-### 3.1 Why this split (and not a different one)
+### 3.1 Why M8a-prep (new in v2)
 
-- **M8a is the keystone.** Nothing else can use the worker if the promote API doesn't exist; nothing measures "stale before use" if `LastAccessAt` isn't written. M8a must land first.
-- **M8b and M8c are orthogonal.** Storage refactor (M8c) and Consolidation Worker (M8b) touch different modules and different concerns. They can ship in either order after M8a.
-- **M8d is the wrap.** Reason-enum freeze can't happen until the worker has produced a stable corpus of reason values to migrate. Typed observer is meaningful only once `was_promoted` is queryable (M8a). Relay hardening is meaningful only with a real consumer (M8b) running.
-- **Not splitting smaller** is intentional. M8a's four pieces (Working tier, promote API, LastAccessAt path, dedupe primitive) are tightly coupled — promote semantics depend on Working tier existing, dedupe depends on promote being atomic. Splitting M8a further would create cross-PR fragility.
+Three reasons one HIGH-severity review finding per:
 
-### 3.2 Out of scope for this umbrella (handled in sub-milestone specs)
+- **Live-write safety:** the migration framework cannot do expand/validate/contract phases today. Without that, M8a's working-tier introduction blocks the write path during the constraint swap (codex finding #3).
+- **Relay hardening before worker:** shipping the Consolidation Worker (M8b) on the current unhardened relay (codex C-1 from M7) inverts safety. The worker amplifies the mid-batch crash hazard, not mitigates it. v1 wrongly placed relay hardening in M8d *after* M8b was live (Plan finding HC-5).
+- **Allowlist before emission:** consumers (vector projector at `outbox_vector_publisher.go:31`) silently drop unknown event types. The allowlist for `memory_promoted` (committed in M7 spec §15 but missing from v1 of this umbrella) and `memory_dedupe_collapsed` (new in v2 §4.3) must extend before any code emits them.
 
-- Specific concurrency strategy for scoredStore (RWMutex vs CoW vs shard-by-kind) — M8c.
-- Specific vector backend choice (pgvector vs Qdrant vs Milvus) — M8c.
-- Specific worker queue runtime (polling relay vs NATS/Kafka) — M8b. Default recommendation: hardened polling relay (codex C-1 mitigation in M8d) — defer broker introduction until measured demand.
-- Specific reason-enum values — M8d, informed by `memory_decision_trace` data gathered while M7 runs in staging (see `docs/m7-staging-observability.md` S1/S5).
+### 3.2 Why M8b and M8c are *actually* orthogonal now (Plan W-1 mitigation)
+
+The v1 orthogonality claim was asserted, not demonstrated. v2 demonstrates:
+
+- M8a defines `Promoter` and `Deduper` interfaces over the **durable** record store, not over the in-memory `scoredStore`. M8b's worker calls these against the SDK abstractions only.
+- M8c's scoredStore lift+refactor is an *internal-implementation* change: same SDK surface, different in-memory engine. M8b doesn't read `*scoredStore` directly — it goes through `RecordStore.GetRecord` etc.
+- The only remaining shared surface is `MemoryItem` (lifted from core to sibling in M8c). M8b consumes it via SDK return values; if M8c renames typed fields on `MemoryItem`, M8b sees that as a routine SDK upgrade, not a behavioral change.
 
 ## 4. Locked Cross-Cutting Decisions
 
-These would have to be re-decided in each sub-milestone if not pinned here. Locking them at umbrella level prevents drift.
+### 4.1 Working tier rollout: expand-first / dual-write / validate / contract
 
-### 4.1 Working tier representation: extend `kind` CHECK, no new column
+**(v2 — complete rewrite)** Replaces v1's single-statement constraint swap and dead `WHERE kind IS NULL` back-fill.
 
-**Decision.** M8a extends `memory_record`'s constraint to `CHECK (kind IN ('working', 'episodic', 'semantic'))`. Existing rows back-fill to `'episodic'` (preserves current observable behavior — every row already in the durable store has effectively been "promoted").
+Five phases. Each phase is one migration framework version (`SchemaVersion N → N+1 → ...`). M8a-prep delivers the staged-migration capability; M8a uses it.
 
-**Alternatives considered:**
+**Phase 1 (M8a-prep, online-safe).** Add a new CHECK constraint as `NOT VALID`:
 
-- *Add a separate `tier` column.* Rejected. Doubles the migration cost (two columns to back-fill, two semantics for callers to track) without adding signal — `kind` already carries enough information once extended.
-- *Use `NULL kind` for working state.* Rejected. NULLs are correctness hazards; CHECK constraints handle them poorly.
+```sql
+ALTER TABLE memory_record
+  ADD CONSTRAINT memory_record_kind_v2_check
+  CHECK (kind IN ('working', 'episodic', 'semantic')) NOT VALID;
+```
 
-**Migration:** one SQL statement to drop+recreate the CHECK constraint; back-fill `UPDATE memory_record SET kind='episodic' WHERE kind IS NULL`; new writes default `kind='working'` via the SDK write path. M8a spec details the exact migration.
+`NOT VALID` skips existing-row validation and takes only `SHARE UPDATE EXCLUSIVE` (no read block).
 
-### 4.2 Atomic promotion API: extend `RecordStore`, do not introduce `MemoryStore.Apply`
+**Phase 2 (M8a-prep, off-peak).** Validate the constraint against existing rows. Since every existing row has `kind IN ('episodic','semantic')`, validation passes trivially:
 
-**Decision.** M8a adds a single method to the existing `RecordStore` interface:
+```sql
+ALTER TABLE memory_record VALIDATE CONSTRAINT memory_record_kind_v2_check;
+```
+
+**Phase 3 (M8a, dual-write window).** SDK code path begins choosing `kind`:
+
+- `WriteRecord` callers that explicitly request `kind='working'` succeed (new acceptance).
+- `WriteRecord` callers that don't specify kind continue defaulting to `'episodic'` (back-compat — keeps existing gateway paths identical).
+- A new SDK helper `MemoryRecord.SetWorkingDefault()` makes the new-write path opt-in per call site.
+
+This phase is **dual-write**, not back-fill. Existing rows are untouched and stay `'episodic'`. New writes that go through the new helper land as `'working'`. Provenance for "was this row promoted from working" is **`consolidated_from_event_id IS NOT NULL`** (Plan finding mitigation), NOT `kind='episodic'` (which can't distinguish "always was episodic" from "was promoted").
+
+**Phase 4 (M8b, worker turned on).** Worker calls `Promoter.Promote(...)` which sets `kind='episodic'` AND populates `consolidated_from_event_id` in one transaction. The "was promoted" semantic is reliably queryable via the column, not the kind value.
+
+**Phase 5 (M8d-tail, contract).** Once all new gateway write paths use the helper from Phase 3 and the worker is steady-state in Phase 4, drop the old CHECK constraint:
+
+```sql
+ALTER TABLE memory_record DROP CONSTRAINT memory_record_kind_check;
+```
+
+The new constraint (added in Phase 1) becomes the only one.
+
+**Rollback path.** Any phase fails: roll back to the prior `SchemaVersion`. Phase 1's `NOT VALID` constraint is removable with `DROP CONSTRAINT`. Phases 3-4 are code-level rollbacks (no DDL). Phase 5 is delayed long enough that rollback is "don't drop yet" — trivial.
+
+### 4.2 Promoter interface (separate from RecordStore — v2 change from extending it)
+
+**(v2 — interface-extension pattern.)** v1 extended `RecordStore` with `PromoteRecord`, which (a) breaks every mock and (b) mixes idempotency patterns. v2 introduces a new SDK interface:
 
 ```go
+// llm-agent-memory/memory/durable.go (added in M8a)
 type PromoteRecordInput struct {
     TenantID        string
     MemoryID        string
     ExpectedVersion int64
-    SourceEventID   string  // populates consolidated_from_event_id; codex S-5 mitigation
-    Reason          string  // typed once M8d freezes the reason enum
+    SourceEventID   string  // outbox-row provenance; populates consolidated_from_event_id
+    IdempotencyKey  string  // composed by worker as sha256(tenant||memory||event_id||"promote")
+    Reason          string  // free-form until M8d enum freeze
 }
 
 type PromoteRecordResult struct {
     MemoryID string
     Version  int64
     Record   MemoryRecord
+    Created  bool  // true if first promote at this version; false if idempotent replay
 }
 
-type RecordStore interface {
-    // existing methods...
-    PromoteRecord(ctx context.Context, in PromoteRecordInput) (PromoteRecordResult, error)
+type Promoter interface {
+    Promote(ctx context.Context, in PromoteRecordInput) (PromoteRecordResult, error)
 }
 ```
 
-The Postgres backend bundles the three writes (record state change + event append + outbox enqueue) into one transaction internally, matching the existing pattern (`store.go:43,399` opens its own pgx tx for `WriteRecord`/`PatchRecord` — same shape for `PromoteRecord`).
+The Postgres backend (`postgres.Store`) implements both `RecordStore` (existing) and `Promoter` (new) on the same struct. Existing test fakes that satisfy `RecordStore` are **unchanged** — `Promoter` is taken by the worker only, and the worker mocks it separately.
 
-**Alternatives considered:**
+**Event emission.** `Promote` emits the `memory_promoted` event type as part of the same transaction that updates `memory_record`. The event payload's `EventType = "memory_promoted"`. M8a-prep already extended the allowlist for this value before M8a code paths emit it (§3.1 ordering rule).
 
-- *Introduce a top-level transactional primitive `MemoryStore.Apply(ctx, op)` that exposes a `Tx` to callers.* Rejected. Leaks DB semantics into the SDK; every backend would have to invent its own `Tx` type; callers gain a footgun (forgetting to commit). Existing mutations already bundle internally — `PromoteRecord` matches that style.
-- *Compose existing methods (PatchRecord + AppendEvent + EnqueueOutbox).* Rejected. Three round-trips, no atomicity guarantee — exactly the failure mode codex C-3 surfaced.
+**Idempotency.** `IdempotencyKey` is required (not optional). The Postgres backend uses the same `memory_idempotency` table as `WriteRecord`. Same `(tenant_id, idempotency_key)` returns the prior result; different hash returns `ErrIdempotencyConflict`. The worker derives the key deterministically from the outbox EventID so relay redelivery is a no-op.
 
-**Idempotency.** `PromoteRecord` is idempotent on `(tenant_id, memory_id, expected_version, source_event_id)`. A redelivered outbox message that already promoted returns the existing record with `Version` unchanged. The `source_event_id` is the durable idempotency key the worker derives from the outbox row.
+**Why a new interface (Plan finding W-2 + codex finding #6 mitigation):**
 
-**SDK release impact.** `RecordStore` is an interface — adding a method breaks every existing mock and adapter (codex previously found 3 mocks in gateway tests). Mitigated by `MockRecordStore` embedding pattern or by bundling the mock updates into the M8a PR. SDK version: bumps to **v1.1.0** (additive but interface-extending = minor bump under semver-ish for interfaces).
+- Doesn't break `RecordStore` mocks (gateway has 3, plus the production `postgres.Store`).
+- Doesn't break published v1.0.0 downstream consumers (`replace`-directive concern from codex).
+- Cleanly separates "worker writes promote events" from "gateway writes user-initiated records." Different idempotency, different reason-enum, different callers.
 
-### 4.3 Dedupe primitive: `ResolveDedupe` returns winner_id, atomic per dedupe-key
+**SDK version impact.** Adding `Promoter` is purely additive — new type, new interface, no existing interface mutates. `llm-agent-memory` SDK bumps to **v1.1.0 (additive)**, no v2.0.0 needed for this change. (v2.0.0 is reserved for M8c's storage refactor + snapshot v2.)
 
-**Decision.** M8a adds a second new method on `RecordStore`:
+### 4.3 Deduper interface + loser-resolution semantics (v2 — adds tombstone path)
+
+**(v2 — complete loser contract.)** v1 said `ResolveDedupe` returns `WinnerID + Action` but never specified what the loser's caller does next.
 
 ```go
+type DedupeAction int
+const (
+    DedupeNoCollision     DedupeAction = iota  // candidate stored, no dedupe row existed
+    DedupeMergedExisting                       // candidate collapsed into existing winner
+    DedupeCollapsedByPin                       // existing winner is pinned; loser is dropped
+)
+
 type ResolveDedupeInput struct {
-    TenantID  string
-    DedupeKey string  // sha256(tenant_id || user_id || category || project_id || normalize(content))
-    Candidate MemoryID  // the incoming candidate
+    TenantID   string
+    DedupeKey  string  // sha256(tenant||user||category||project_id||normalize(content))
+    Candidate  MemoryRecord  // full record, not just ID — needed for tombstone payload
 }
 
 type ResolveDedupeResult struct {
-    WinnerID  MemoryID  // may equal Candidate or be an existing memory_id
-    Action    DedupeAction  // KEPT_NEW | MERGED_INTO_EXISTING | COLLAPSED_BY_PIN
+    WinnerID  string
+    Action    DedupeAction
+}
+
+type Deduper interface {
+    ResolveDedupe(ctx context.Context, in ResolveDedupeInput) (ResolveDedupeResult, error)
 }
 ```
 
-Backed by a new `memory_dedupe_index` table with `UNIQUE (tenant_id, dedupe_key)`. The Postgres implementation runs the insert + winner-selection in one transaction (codex C-2 mitigation).
+**Storage:** new `memory_dedupe_index(tenant_id, dedupe_key, winner_memory_id, created_at)` with `UNIQUE (tenant_id, dedupe_key)`. Migration lands in M8a (after M8a-prep migration framework is online).
 
-**Dedupe key includes `project_id`** per Plan-agent S-3 finding (cross-project collapse hazard if omitted). `session_id` is NOT in the key — cross-session promotion remains supported.
+**Loser-resolution flow (when `Action = DedupeMergedExisting`):**
 
-**Normalization** for the content portion: lowercase + collapse whitespace + strip ASCII punctuation. Unicode-aware normalization deferred (M7 spec W-1 acknowledgment).
+1. Backend transaction inserts into `memory_dedupe_index`; the `UNIQUE` constraint deterministically picks the first writer as winner. The loser's transaction sees the constraint violation and reads the winner row.
+2. Backend writes loser's `memory_record.deleted = TRUE` (schema already supports this — column exists).
+3. Backend emits a **new event type `memory_dedupe_collapsed`** with payload `{winner_id, loser_id, tenant_id}`. M8a-prep already extended the allowlist for this value.
+4. Vector projector subscribes to `memory_dedupe_collapsed` and removes the loser's vector chunks.
+5. Any *pending* outbox rows for the loser memory_id reach the projector AFTER the collapse event; the projector's existing `GetRecord` check returns the loser as `deleted` and the publisher marks the row stale (existing behavior at `outbox_vector_publisher.go:35,42`).
 
-### 4.4 LastAccessAt write path: batched, non-blocking, recall-side only
+**Net property:** the loser is removed from durable storage AND from vector indexes AND its remaining outbox messages are non-destructive (they no-op against the deleted record). No orphans.
 
-**Decision.** M8a adds an `UPDATE memory_record SET last_access_at = $1, hit_count = hit_count + 1 WHERE tenant_id = $2 AND memory_id = ANY($3)` call from the gateway recall path, batched across all hits in the response, using a separate non-transactional write that fires AFTER the recall response has been sent to the client.
+**Dedupe key normalization:** lowercase + collapse whitespace + strip ASCII punctuation. Unicode-aware normalization deferred (M7 W-1). Dedupe key **includes `project_id`** (Plan finding S-3 mitigation): two users in different projects with identical content do not collide.
 
-**Reason:** sync-writing access marks on every recall would add a write-amplification storm. Async fire-and-forget (with the same bounded-channel pattern as the M7 trace sink) gives "best effort" semantics that match the observability use case.
+**`session_id` is NOT in the key** by design: same content across sessions IS a valid dedupe candidate.
 
-**On failure:** increment `last_access_write_failures_total` (operational counter, no `tenant_bucket` label, matches `storage_cron_failures_total` shape). No retry — next recall will re-write anyway.
+### 4.4 LastAccessAt batched async writes (cardinality fix)
 
-### 4.5 scoredStore relocation: lift first, refactor second
+**(v2 — restore `tenant_bucket` label.)** v1 said `last_access_write_failures_total` has no labels. v2 keeps the `tenant_bucket` label per cardinality convention. Operators want per-tenant attribution.
 
-**Decision.** M8c starts by **copying** `internal_score.go` + its tests from `llm-agent/memory/` into `llm-agent-memory/memory/`, then making the sibling's Working/Episodic/Semantic types reference the local copy instead of the core import. Core `scoredStore` becomes the deprecation patch's only remaining surface. Refactor (RWMutex / CoW / shard-by-kind) happens against the lifted copy in the sibling.
+Mechanism unchanged from v1: bounded channel + writer goroutine + UPDATE batched across hits. On failure: `last_access_write_failures_total{tenant_bucket}` increments. On drop (channel full): `last_access_dropped_total{tenant_bucket,reason}` with reasons `buffer_full / shutdown` (mirrors `trace_dropped_total` shape from M7).
 
-**Reason:** refactoring in core while announcing core deprecation is wasted work. Lifting first gives the sibling a stable starting point for the refactor and lets core enter pure-bug-fix-only mode immediately.
+**Plan W-3 acknowledgment:** under sustained load, drops accumulate. The dropped counter signals this. M8d's `working_dropped_before_use_total` interpretation must account for the gap between "no recall happened" and "recall happened, last_access write dropped." Acceptable for v2.0.0 telemetry use; documented at M8d spec time.
 
-**Sub-decision deferred to M8c spec:** which concurrency strategy. Three candidates from roadmap §6.1:
+### 4.5 scoredStore relocation — package-cluster lift with benchmark first
 
-| Candidate | Pro | Con |
-|---|---|---|
-| RWMutex + immutable iterator view | Smallest delta | Reader doesn't see writes mid-iteration; OK for recall but quirky for tests |
-| Copy-on-Write per write | Zero reader contention | Allocation pressure under high write rate |
-| Shard by kind (Working / Episodic / Semantic each get their own mutex) | Cleanest separation; matches the tier model | Cross-shard atomic ops (promotion!) need extra coordination |
+**(v2 — corrected scope.)** v1 said "copy `internal_score.go` + tests." Verified false in §2.5.
 
-The roadmap target is "≥2× concurrent-read throughput at 10k items." M8c picks based on benchmark, not opinion.
+M8c's first deliverable is a **benchmark harness** in `llm-agent-memory/memory/internal_score_bench_test.go`. Workload mix: 80% read / 20% write, 10k items, 16 concurrent goroutines. Reports baseline before any concurrency change is made.
 
-### 4.6 Reason enum freeze process
+The lift then proceeds as a **package-cluster move**:
 
-**Decision.** M8d freezes the reason enum at the SDK boundary. Migration of existing M7 free-form trace rows: rows with reasons that map cleanly to enum values get re-tagged; ambiguous values get `reason='legacy_unmigrated'` and the original written into payload. No row deletion.
+1. Copy `internal_score.go`, `memory.go` (for `MemoryItem`, `Kind`, `Stats`), `persistence.go` (snapshot/import helpers), `working.go` (for `WorkingMemory`'s direct `*scoredStore` dependency).
+2. Update sibling files that import from core: `recall_engine.go`, `consolidator.go`, `parallel_search.go`, `manager.go`, `consolidator_test.go`, `testutil_test.go` (6 files, verified during v2 review).
+3. Core retains the original files as deprecation patches (announce in core CHANGELOG; final patch tag).
+4. Refactor concurrency in the sibling-local copy. Strategy decided by benchmark, not opinion. The benchmark target is "≥2× concurrent-read throughput at 10k items" (roadmap exit criterion).
 
-The enum's first-class values are picked **from M7 staging data** (see `docs/m7-staging-observability.md` S1/S5). Long-tail values (<1% of rows) collapse to `'other'` in the frozen enum.
+**Sub-decision deferred to M8c spec:** which concurrency strategy. Three candidates from roadmap §6.1. Benchmark methodology pinned in M8c spec.
 
-**Implication for sub-milestone ordering:** M8d benefits from M7 having run in staging long enough to populate `memory_decision_trace` with realistic reason values. Calendar-time loose-coupling between M7 ship and M8d kickoff is a feature, not a bug.
+### 4.6 Reason-enum freeze readiness criteria (v2 — quantified)
 
-## 5. Cross-Module Impact (Honest Inventory)
+**(v2 — adds objective trigger.)** v1 said "freeze from staging data" with no threshold.
 
-Far larger than M7's narrow scope. Listed by module:
+M8d kickoff requires:
+
+- ≥10,000 rows in `memory_decision_trace` covering ≥14 days of real traffic.
+- ≥3 distinct tenant_ids in the trace.
+- The top-10 most-frequent `reason` values cover ≥80% of trace rows.
+- Long-tail reasons (<1% of rows individually) covered by an `'other'` bucket.
+
+If any of the above fails at M8d kickoff, **M8d delays** (not "freeze on inadequate data"). Status check via the queries in `docs/m7-staging-observability.md` (S1, S5).
+
+### 4.7 Versioning + release sequencing (v2 — addresses `replace`-directive caveat)
+
+**(v2 — explicit lockstep policy.)** Codex finding #6: local `go.mod` replace directives hide what published consumers see.
+
+Required lockstep tagging:
+
+- **M8a-prep ship:** `llm-agent-memory v1.0.1` (migration framework only — bug-fix-level, backwards-compatible additions to `Migrate()` shape) and `llm-agent-memory-postgres v0.x.y` (relay hardening + new event-type allowlist).
+- **M8a ship:** `llm-agent-memory v1.1.0` (additive: `Promoter`, `Deduper` interfaces) and `llm-agent-memory-postgres v0.(x+1).0` (impls). Gateway pinned to both new versions in lockstep.
+- **M8b ship:** new `llm-agent-memory-worker v0.1.0` sibling, depends on the v1.1.0 SDK.
+- **M8c ship:** `llm-agent-memory v2.0.0` (storage refactor + snapshot v2 + MemoryItem typed-field lift). Other siblings track this with their own major bump.
+- **M8d ship:** `llm-agent-memory v2.x.y` (typed RecallObservation extension — additive on v2). Gateway + worker pinned to it.
+
+**No interface mutates without a major-version bump.** `Promoter` and `Deduper` are additive (new types). `MemoryItem` field changes (M8c) are breaking and gate v2.0.0.
+
+Existing `go.mod` `replace` directives stay during umbrella development. Each ship cuts a real tag and bumps the consumer go.mod to the tag, dropping the replace.
+
+## 5. Cross-Module Impact (v2 — expanded)
 
 ### 5.1 `llm-agent-memory` (SDK)
 
-- M8a: extend `RecordStore` interface (+2 methods); add `PromoteRecordInput/Result`, `ResolveDedupeInput/Result`, `DedupeAction` types. **First minor bump since v1.0.0.**
-- M8c: full scoredStore relocation + refactor. **Major bump to v2.0.0.**
-- M8d: extend `RecallObservation` with typed fields; freeze reason enum. **Possibly another minor between v2.0.0 and any post-v2 line.**
+- M8a-prep: bug-fix patch (migration framework helper). v1.0.1.
+- M8a: add `Promoter`, `Deduper`, paired input/output types, `MemoryRecord.SetWorkingDefault()` helper. v1.1.0 additive.
+- M8c: full scoredStore package-cluster move + concurrency refactor + `MemoryItem` typed-field lift. **v2.0.0 major.**
+- M8d: extend `RecallObservation` typed fields. v2.1.0 additive.
 
 ### 5.2 `llm-agent-memory-postgres`
 
-- M8a: extend `kind` CHECK; add `memory_dedupe_index` table; implement `PromoteRecord` + `ResolveDedupe`; add `LastAccessAt` update statement.
-- M8d: relay delivery hardening (per-row ack or `processing` state with lease).
+- M8a-prep: implement staged-migration support; wire `outboxStatusProcessing` writes (relay hardening); extend in-code event-type allowlist with `memory_promoted` + `memory_dedupe_collapsed`.
+- M8a: schema migrations for kind-v2 CHECK + `memory_dedupe_index` table. Implement `Promoter`, `Deduper` on `Store`.
+- M8d: schema migration for `memory_decision_trace.reason` enum freeze (validate against frozen value set; rows that don't match get `reason='legacy_unmigrated'`).
 
 ### 5.3 `llm-agent-memory-gateway`
 
-- M8a: call `PromoteRecord` from any code path that currently does a manual update + event emit + outbox enqueue (audit during M8a spec).
-- M8a: wire the batched `LastAccessAt` writer; add the operational failure counter.
-- M8d: extend `RecallObserver` impls; emit the 7 deferred counters; add the feedback ingest HTTP endpoint.
+- M8a: wire batched `LastAccessAt` writer; emit `last_access_*` counters.
+- M8c: track sibling SDK major bump; rewire any `MemoryItem` field access that moves from `Metadata` to typed fields.
+- M8d: extend `RecallObserver` impl; emit deferred 7 counters; add feedback ingest HTTP endpoint.
 
 ### 5.4 New module: `llm-agent-memory-worker` (M8b)
 
-New sibling. Cmd binary `cmd/consolidation-worker/main.go`. Internal packages mirror the gateway shape — config, transport (consumer side), service, observability.
+Brand new sibling. Module shape mirrors gateway (config / transport / service / observability). Depends on `llm-agent-memory v1.1.0` for `Promoter` + `Deduper`.
 
 ### 5.5 `llm-agent` (core)
 
-Deprecation patch: announce in `CHANGELOG.md`; cut a final patch release; no new features. Core `scoredStore` becomes the last functional thing left after M8c lifts.
+- M8a-prep / M8a: no change (core was deprecation-frozen at M4).
+- M8c: deprecation patch — announce in `CHANGELOG.md` that the storage engine has moved; final patch tag cuts. Core stays buildable but emits deprecation notices on import.
 
-## 6. Non-Goals (Explicit)
+## 6. Non-Goals
 
 - Salience / learned rerank / decay learning. Out of v2 per memory-roadmap §11.3.
-- Vector-similarity dedupe (third layer). Out of M8 even after M8a's dedupe primitive lands — that's a P2 future enhancement gated behind an opt-in policy flag.
-- Multi-tenant isolation strengthening beyond what M5 + M7 already enforce.
-- HTTP API additions beyond the feedback ingest endpoint in M8d.
-- Schema-level partition / retention automation for `memory_decision_trace` — operator obligation per M7 OD-5.
+- Vector-similarity dedupe. P2; gated behind opt-in flag, default off.
+- Cross-region or DR planning. Out of M8 entirely; v3 concern.
+- Replacing the M7 trace-sink's free-form `reason` column with the frozen enum at the column level. The M8d migration retags rows but the column stays `text` for forward-compat with future enum extensions.
 
-## 7. Acceptance Criteria for This Umbrella
+## 7. Acceptance Criteria for This Umbrella v2
 
-The umbrella is approved when:
+The umbrella v2 is approved when:
 
-1. The 4 sub-milestones are endorsed in name and dependency order (§3).
-2. The 6 locked decisions (§4.1–§4.6) are endorsed; any not-endorsed item demotes back to "open question" and re-surfaces at the relevant sub-milestone spec.
-3. Cross-module impact (§5) is endorsed: SDK gets a v1.1.0 minor, a v2.0.0 major, and likely a follow-on minor; new sibling appears in M8b; core gets a deprecation patch in M8c.
-4. The reason-enum freeze approach (§4.6) — collect data from M7 staging, then freeze — is endorsed as a sequencing rule, not just an aspiration.
+1. The 5-stage sub-milestone split (§3) is endorsed: M8a-prep is necessary, not optional.
+2. The 7 locked decisions (§4.1–§4.7) are endorsed without exception. Any "I'd prefer differently" item demotes back to "open question" and re-surfaces at the relevant sub-milestone spec.
+3. The Promoter/Deduper interface-extension pattern (vs RecordStore method addition) is endorsed (§4.2 / §4.3).
+4. Lockstep versioning policy (§4.7) is endorsed: every interface change ships with a paired sibling version bump.
 
-Once §7 is signed off, the next four artifacts are sub-milestone specs:
+Once §7 is signed off, sub-milestone specs branch:
 
-- `docs/superpowers/specs/<date>-m8a-substrate-design.md`
-- `docs/superpowers/specs/<date>-m8b-consolidation-worker-design.md`
-- `docs/superpowers/specs/<date>-m8c-storage-refactor-design.md`
-- `docs/superpowers/specs/<date>-m8d-typed-observer-and-enum-freeze-design.md`
+- `docs/superpowers/specs/<date>-m8a-prep-migration-framework-and-relay.md` ← first
+- `docs/superpowers/specs/<date>-m8a-substrate-design.md` ← then
+- `docs/superpowers/specs/<date>-m8b-consolidation-worker-design.md` and `<date>-m8c-storage-refactor-design.md` in parallel
+- `docs/superpowers/specs/<date>-m8d-typed-observer-and-enum-freeze-design.md` last
 
-Each will go through the two-round review pattern (Plan-type agent + codex consult) per the `feedback_two-round-spec-review` memory before its implementation plan is written.
+Each goes through the two-round review pattern before its plan is written.
 
-## 8. Known Weaknesses of This Umbrella
+## 8. Review-Finding Disposition (v1 → v2)
 
-- **W-1.** The §3 dependency graph claims M8b and M8c are orthogonal. This holds at the schema level but may break at the in-memory level — M8c's scoredStore refactor changes the internal storage shape that M8b's worker may want to read for dedupe purposes. M8c spec should explicitly verify "no worker code path reads `*scoredStore` directly" before claiming orthogonality.
-- **W-2.** §4.2's `PromoteRecord` addition breaks existing test mocks of `RecordStore`. M8a spec must enumerate every existing mock and bundle the updates atomically — incremental landing will produce broken intermediate states.
-- **W-3.** §4.4's batched `LastAccessAt` writes are fire-and-forget. Under sustained recall load, the buffer fills and we drop access marks; the operational counter signals this, but it means the working_dropped_before_use_total metric M8d depends on becomes less accurate at scale. Acceptable for v2.0.0 telemetry use; document the limit at M8d spec time.
-- **W-4.** §4.5's lift-first-refactor-second plan assumes `internal_score.go` is genuinely copyable — no hidden imports from elsewhere in core, no test fixtures that bind to package-private symbols. M8c spec should grep before committing.
-- **W-5.** §4.6's "freeze enum from staging data" assumes M7 actually runs in staging long enough to produce a stable reason corpus. If M8 starts before that, M8d either delays or freezes on inadequate data — flag at sub-milestone kickoff.
+How each of the 20 round-1 and round-2 findings landed:
+
+| Finding | Source | Disposition in v2 |
+|---|---|---|
+| HIGH — back-fill `WHERE kind IS NULL` is dead code (kind is NOT NULL) | codex | §4.1 fully rewritten; provenance via `consolidated_from_event_id IS NOT NULL`, not `kind` |
+| HIGH — migration framework can't do expand/contract; need staged transitions | codex | §3.1 + §4.1 add M8a-prep with staged-migration capability |
+| HIGH — M8a not additive; current write path emits `kind` verbatim | codex | §4.1 Phase 1+2 (NOT VALID then VALIDATE) lands BEFORE any write-path code change |
+| HIGH — ALTER constraint takes ACCESS EXCLUSIVE | Plan | §4.1 Phase 1 uses `NOT VALID` (SHARE UPDATE EXCLUSIVE only) |
+| HIGH — `memory_promoted` event never mentioned in umbrella | Plan | §3.1 + §4.2 commit allowlist extension to M8a-prep; emission to M8a Promoter |
+| HIGH — back-fill mislabels `agent_inferred` as "promoted" | Plan | §4.1 Phase 3 keeps existing rows untouched (still `episodic`); provenance via `consolidated_from_event_id` |
+| HIGH — PromoteRecord idempotency key doesn't match WriteRecord's | Plan | §4.2 adds `IdempotencyKey` to input; aligns with `memory_idempotency` table |
+| HIGH — ResolveDedupe loser-contract undefined | Plan + codex | §4.3 specifies loser flow: deleted=TRUE + `memory_dedupe_collapsed` event + vector cleanup |
+| HIGH — ResolveDedupe orphan outbox messages | codex | §4.3 step 5: loser's pending outbox rows no-op against deleted record |
+| HIGH — relay hardening placement wrong (worker before relay safe) | Plan | §3 moves relay hardening to M8a-prep |
+| HIGH — version-skew / `replace`-directive hides break | codex | §4.7 lockstep tagging policy; §4.2 Promoter interface avoids breaking RecordStore mocks anyway |
+| HIGH — interface extension recommended over RecordStore method add | codex | §4.2 + §4.3 use Promoter/Deduper separate interfaces |
+| MEDIUM — scoredStore lift scope under-claimed | Plan + codex | §4.5 + §2.5 quantify: 5+ files in lift, 6+ sibling import updates, plus benchmark harness creation |
+| MEDIUM — no benchmark harness exists | codex | §4.5 step 1 of M8c is benchmark harness creation |
+| MEDIUM — concurrency strategy decision unmethodical | Plan | §4.5 defers to benchmark; methodology pinned in M8c spec |
+| MEDIUM — staging-data threshold for enum freeze qualitative | Plan | §4.6 quantifies: 10k rows / 14 days / 3 tenants / top-10 ≥80% |
+| MEDIUM — M8b ∥ M8c orthogonality asserted not demonstrated | Plan | §3.2 demonstrates: Promoter/Deduper are durable-side; in-memory refactor stays M8c-internal |
+| MEDIUM — last_access cardinality convention violation | Plan | §4.4 restores `tenant_bucket` label |
+| MEDIUM — M8d bundles relay + observer (unrelated workstreams) | Plan | §3 splits: relay → M8a-prep; observer → M8d (sole focus now) |
+| LOW — `memory_dedupe_index` retention not specified | Plan | §4.3 storage: rows persist for the life of the dedupe relation (long-lived index, like primary key); GC tied to hard-delete of winner |
+
+All 20 findings have an explicit landing place. Nothing was silently dropped.
+
+## 9. Known Weaknesses of This v2
+
+- **W-1.** §4.1 Phase 5 contract step is delayed long enough that "real M8 completion" arrives only at M8d-tail. If a deployment never finishes the migration sequence, the old `kind_check` constraint survives forever as benign dead code. Operational, not correctness.
+- **W-2.** §4.3's normalization (ASCII-only) collides false-positives for users typing the same content in different cases. Unicode-aware deferred. Document at M8a spec time.
+- **W-3.** §4.6's threshold (10k rows / 14 days) is operator-friendly but assumes M7 actually gets staging traffic of that scale. If M7 sits idle longer than 14 days, M8d delays automatically — feature, not bug.
+- **W-4.** §4.7's lockstep tagging policy is a coordination rule, not a tooling enforcement. A future contributor could ship `llm-agent-memory v1.2.0` without bumping postgres or gateway. Tooling-side enforcement (CI check) is M8a-prep-adjacent but not in scope here.
+- **W-5.** The Promoter / Deduper interface-extension pattern works for current callers, but if a future caller wants atomic "promote-and-dedupe-in-one-tx" semantics, they'd need a composite operation that doesn't exist in either interface. Recognized; designed-in if needed at sub-milestone spec time.
