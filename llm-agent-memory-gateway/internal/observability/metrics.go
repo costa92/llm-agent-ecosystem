@@ -43,6 +43,12 @@ type Snapshot struct {
 	// so the gateway does not double-book this counter. Zero values when no
 	// source is wired.
 	TraceDropped service.TraceDroppedSnapshot
+
+	// StorageCronFailuresTotal counts ticks of the storage-bytes cron whose
+	// query returned an error. Operational telemetry for the cron itself —
+	// not labelled by tenant_bucket because the failure is global to the
+	// query.
+	StorageCronFailuresTotal uint64
 }
 
 type Metrics struct {
@@ -57,6 +63,8 @@ type Metrics struct {
 	outboxStale     atomic.Int64
 	outboxFailed    atomic.Int64
 	outboxIgnored   atomic.Int64
+
+	storageCronFailures atomic.Uint64
 
 	// Per-bucket counters. mu guards map structure; the *atomic.Uint64 values
 	// themselves are lock-free once their map entry exists, so the hot path
@@ -136,6 +144,11 @@ func (m *Metrics) AddRecallSelected(tenantBucket string, n uint64) {
 	m.addBucket(m.recallSelected, tenantBucket, n)
 }
 
+// AddStorageCronFailure increments the operational counter for storage-bytes
+// cron failures (Task 7). Unlike the 10 validation counters this carries no
+// tenant_bucket label — the failure is global to the cron tick.
+func (m *Metrics) AddStorageCronFailure() { m.storageCronFailures.Add(1) }
+
 // SetTraceDropSource wires the sink's drop counters as the source of truth for
 // the trace_dropped_total exposition. Passing nil restores the zero-snapshot
 // default. Safe to call concurrently with Handler().
@@ -199,6 +212,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		OutboxProjectionStaleTotal:     m.outboxStale.Load(),
 		OutboxProjectionFailedTotal:    m.outboxFailed.Load(),
 		OutboxProjectionIgnoredTotal:   m.outboxIgnored.Load(),
+		StorageCronFailuresTotal:       m.storageCronFailures.Load(),
 	}
 	m.mu.RLock()
 	snap.EmbeddingRequestTotal = copyBuckets(m.embeddingRequest)
@@ -284,6 +298,7 @@ func (m *Metrics) Handler() http.Handler {
 			fmt.Sprintf(`trace_dropped_total{reason="buffer_full"} %d`, snap.TraceDropped.BufferFull),
 			fmt.Sprintf(`trace_dropped_total{reason="db_error"} %d`, snap.TraceDropped.DBError),
 			fmt.Sprintf(`trace_dropped_total{reason="shutdown"} %d`, snap.TraceDropped.Shutdown),
+			fmt.Sprintf("storage_cron_failures_total %d", snap.StorageCronFailuresTotal),
 		)
 
 		_, _ = fmt.Fprint(w, strings.Join(lines, "\n"))
