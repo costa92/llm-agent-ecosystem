@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +23,18 @@ import (
 	ragpg "github.com/costa92/llm-agent-rag/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Trace + storage tables are produced by llm-agent-memory-postgres without a
+// table prefix when the gateway constructs the Store with pgmemory.Config{}.
+// We mirror the default names here. If the gateway ever starts honoring a
+// non-empty TablePrefix, these constants need to move into a Store accessor
+// (or the prefix needs to round-trip through config). The M7 plan explicitly
+// keeps llm-agent-memory-postgres frozen after Task 1, so we accept the
+// duplication.
+const (
+	memoryDecisionTraceTableName = "memory_decision_trace"
+	memoryRecordTableName        = "memory_record"
 )
 
 func main() {
@@ -71,9 +86,49 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 
 	metrics := observability.NewMetrics()
 
+	// Trace sink: best-effort async persistence of decision-trace rows. The
+	// sink is started in a background goroutine; Stop drains within the
+	// configured budget. Lifecycle is wired below so Stop runs BEFORE pool
+	// close.
+	traceSink := service.NewPostgresDecisionTraceSink(service.PostgresDecisionTraceSinkConfig{
+		InsertFunc:      buildTraceInsertFunc(poolTraceInsertExecutor{pool: pool}, memoryDecisionTraceTableName),
+		BufferSize:      cfg.TraceSinkBufferSize,
+		BatchSize:       cfg.TraceSinkBatchSize,
+		ShutdownTimeout: cfg.TraceSinkShutdownTimeout,
+	})
+	metrics.SetTraceDropSource(traceSink.DroppedSnapshot)
+	sinkCtx, sinkCancel := context.WithCancel(context.Background())
+	go traceSink.Run(sinkCtx)
+	cleanupFns = append(cleanupFns, func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), cfg.TraceSinkShutdownTimeout)
+		defer stopCancel()
+		traceSink.Stop(stopCtx)
+		sinkCancel()
+	})
+	traceSinkEmitter := observability.NewTraceSinkEmitter(traceSink, "gateway", time.Now)
+
+	// Storage-bytes cron: periodic snapshot of per-tenant memory bytes from
+	// the memory_record table. Vector bytes are reported as zero in v1; the
+	// vector store lives outside this Postgres database.
+	storageCron := service.NewStorageMetricsCron(service.StorageMetricsCronConfig{
+		Query:    buildStorageMetricsQuery(poolStorageQueryExecutor{pool: pool}, memoryRecordTableName),
+		Metrics:  metrics,
+		Interval: cfg.StorageMetricsInterval,
+	})
+	cronCtx, cronCancel := context.WithCancel(context.Background())
+	go storageCron.Run(cronCtx)
+	cleanupFns = append(cleanupFns, func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), cfg.TraceSinkShutdownTimeout)
+		defer stopCancel()
+		storageCron.Stop(stopCtx)
+		cronCancel()
+	})
+
 	vectorSource, vectorCleanup, err := buildVectorCandidateSource(ctx, cfg, metrics)
 	if err != nil {
-		pool.Close()
+		for i := len(cleanupFns) - 1; i >= 0; i-- {
+			cleanupFns[i]()
+		}
 		return nil, nil, err
 	}
 	if vectorCleanup != nil {
@@ -86,6 +141,7 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 		observability.ComposeTraceEmitters(
 			slogTraceEmitter{logger: logger},
 			metrics.TraceEmitter(),
+			traceSinkEmitter,
 		),
 		service.Config{
 			ReadOnly:            cfg.ReadOnly,
@@ -214,6 +270,166 @@ func buildVectorProjector(cfg config.Config, source service.RecallCandidateSourc
 		projector.SetEmbeddingMetrics(metrics, cfg.EmbeddingCostMicrosPerToken)
 	}
 	return projector
+}
+
+// traceInsertExecutor abstracts the pgx pool surface used by the trace insert
+// closure so the closure is unit-testable without a live database.
+type traceInsertExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (commandTagDiscard, error)
+}
+
+// commandTagDiscard is a tiny shim so traceInsertExecutor doesn't need to
+// import pgconn. The actual pgxpool.Pool returns pgconn.CommandTag; we ignore
+// the value, so any type works for the interface contract.
+type commandTagDiscard struct{}
+
+// poolTraceInsertExecutor adapts a *pgxpool.Pool to traceInsertExecutor.
+type poolTraceInsertExecutor struct{ pool *pgxpool.Pool }
+
+func (e poolTraceInsertExecutor) Exec(ctx context.Context, sql string, args ...any) (commandTagDiscard, error) {
+	_, err := e.pool.Exec(ctx, sql, args...)
+	return commandTagDiscard{}, err
+}
+
+// buildTraceInsertFunc returns a closure that batch-inserts TraceRow records
+// into the memory_decision_trace table using a single multi-VALUES statement.
+// The closure swallows nullable string/int64 columns into proper NULL slots.
+//
+// The closure is intentionally factored so that tests can wire a fake executor;
+// see main_test.go.
+func buildTraceInsertFunc(exec traceInsertExecutor, table string) func(ctx context.Context, rows []service.TraceRow) error {
+	return func(ctx context.Context, rows []service.TraceRow) error {
+		if len(rows) == 0 {
+			return nil
+		}
+		const colsPerRow = 9
+		args := make([]any, 0, len(rows)*colsPerRow)
+		placeholders := make([]string, 0, len(rows))
+		for i, row := range rows {
+			base := i*colsPerRow + 1
+			placeholders = append(placeholders, fmt.Sprintf(
+				"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
+			))
+			emittedAt := row.EmittedAt
+			if emittedAt.IsZero() {
+				emittedAt = time.Now().UTC()
+			}
+			var payloadJSON any
+			if len(row.Payload) > 0 {
+				raw, err := json.Marshal(row.Payload)
+				if err != nil {
+					return fmt.Errorf("marshal trace payload: %w", err)
+				}
+				payloadJSON = raw
+			}
+			var version any
+			if row.Version != 0 {
+				version = row.Version
+			}
+			args = append(args,
+				row.TenantID,
+				nullIfEmpty(row.RequestID),
+				row.Stage,
+				row.Reason,
+				nullIfEmpty(row.MemoryID),
+				version,
+				emittedAt,
+				row.Emitter,
+				payloadJSON,
+			)
+		}
+		sql := fmt.Sprintf(
+			`INSERT INTO %s (tenant_id, request_id, stage, reason, memory_id, version, emitted_at, emitter, payload) VALUES %s`,
+			table,
+			strings.Join(placeholders, ", "),
+		)
+		_, err := exec.Exec(ctx, sql, args...)
+		return err
+	}
+}
+
+// storageQueryExecutor abstracts the pgx pool query surface so the storage cron
+// query closure is unit-testable without a live database.
+type storageQueryExecutor interface {
+	Query(ctx context.Context, sql string, args ...any) (storageQueryRows, error)
+}
+
+// storageQueryRows is the tiny iterator surface we need from pgx.Rows.
+type storageQueryRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close()
+}
+
+// poolStorageQueryExecutor adapts *pgxpool.Pool to storageQueryExecutor.
+type poolStorageQueryExecutor struct{ pool *pgxpool.Pool }
+
+func (e poolStorageQueryExecutor) Query(ctx context.Context, sql string, args ...any) (storageQueryRows, error) {
+	rows, err := e.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgxRowsAdapter{rows: rows}, nil
+}
+
+// pgxRowsAdapter wraps pgx.Rows to satisfy the local storageQueryRows interface
+// (pgx.Rows.Close returns void so it already matches; the wrapper exists just
+// to bridge the type identity).
+type pgxRowsAdapter struct{ rows pgx.Rows }
+
+func (a pgxRowsAdapter) Next() bool             { return a.rows.Next() }
+func (a pgxRowsAdapter) Scan(dest ...any) error { return a.rows.Scan(dest...) }
+func (a pgxRowsAdapter) Err() error             { return a.rows.Err() }
+func (a pgxRowsAdapter) Close()                 { a.rows.Close() }
+
+// buildStorageMetricsQuery returns a closure that aggregates per-tenant memory
+// storage bytes from the memory_record table.
+//
+// vector_storage_bytes is reported as 0 in v1 because vector embeddings live in
+// a separate RAG vector store (the llm-agent-rag/postgres backend), not in this
+// Postgres database. The counter exposition still emits zero rows so dashboards
+// see a stable shape; M8 may wire the vector store as a second source.
+func buildStorageMetricsQuery(exec storageQueryExecutor, memoryTable string) func(ctx context.Context) ([]service.StorageRow, error) {
+	return func(ctx context.Context) ([]service.StorageRow, error) {
+		sql := fmt.Sprintf(
+			`SELECT tenant_id, COALESCE(SUM(octet_length(content)), 0)::bigint AS memory_bytes FROM %s GROUP BY tenant_id`,
+			memoryTable,
+		)
+		rows, err := exec.Query(ctx, sql)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		var out []service.StorageRow
+		for rows.Next() {
+			var tenantID string
+			var memoryBytes int64
+			if err := rows.Scan(&tenantID, &memoryBytes); err != nil {
+				return nil, err
+			}
+			if memoryBytes < 0 {
+				memoryBytes = 0
+			}
+			out = append(out, service.StorageRow{
+				TenantID:    tenantID,
+				MemoryBytes: uint64(memoryBytes),
+				// VectorBytes is zero in v1 — embeddings are in a separate
+				// RAG vector store; see buildStorageMetricsQuery doc comment.
+				VectorBytes: 0,
+			})
+		}
+		return out, rows.Err()
+	}
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func parseVectorIndex(index string) ragpg.VectorIndex {

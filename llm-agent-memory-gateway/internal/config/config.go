@@ -9,14 +9,18 @@ import (
 )
 
 const (
-	defaultListenAddr     = ":8080"
-	defaultSessionIdleTTL = 30 * time.Minute
-	defaultRecallMode     = "lexical"
-	defaultVectorTable    = "memory_gateway_vectors"
-	defaultVectorIndex    = "none"
-	defaultVectorDim      = 32
-	defaultOutboxPoll     = time.Second
-	defaultOutboxBatch    = 100
+	defaultListenAddr           = ":8080"
+	defaultSessionIdleTTL       = 30 * time.Minute
+	defaultRecallMode           = "lexical"
+	defaultVectorTable          = "memory_gateway_vectors"
+	defaultVectorIndex          = "none"
+	defaultVectorDim            = 32
+	defaultOutboxPoll           = time.Second
+	defaultOutboxBatch          = 100
+	defaultTraceSinkBufferSize  = 1024
+	defaultTraceSinkBatchSize   = 50
+	defaultTraceSinkShutdown    = 5 * time.Second
+	defaultStorageMetricsCycle  = 5 * time.Minute
 )
 
 type Config struct {
@@ -41,19 +45,49 @@ type Config struct {
 	// Default 0 keeps the counter at zero for deployments that haven't wired
 	// up a cost rate yet.
 	EmbeddingCostMicrosPerToken uint64
+
+	// TraceSinkBufferSize bounds the in-memory queue of the async
+	// decision-trace sink. When the queue is full, Record drops rows
+	// non-blockingly and bumps trace_dropped_total{reason="buffer_full"}.
+	// Default 1024.
+	TraceSinkBufferSize int
+
+	// TraceSinkBatchSize is the maximum rows per INSERT issued by the sink's
+	// writer goroutine. Default 50.
+	TraceSinkBatchSize int
+
+	// TraceSinkShutdownTimeout bounds the drain budget when the gateway shuts
+	// down. Rows that cannot be flushed within the budget are counted as
+	// trace_dropped_total{reason="shutdown"}. Default 5s.
+	TraceSinkShutdownTimeout time.Duration
+
+	// StorageMetricsInterval is the period at which the storage-bytes cron
+	// re-queries Postgres and updates memory_storage_bytes_total /
+	// vector_storage_bytes_total. Default 5m.
+	StorageMetricsInterval time.Duration
+
+	// TraceRetentionEnabled is a forward-looking flag (M8) for operator-side
+	// retention of memory_decision_trace rows. v1 (M7) leaves this off and
+	// treats retention as an operator obligation — see spec OD-5. Default
+	// false.
+	TraceRetentionEnabled bool
 }
 
 func LoadFromEnv() (Config, error) {
 	cfg := Config{
-		ListenAddr:         defaultListenAddr,
-		PostgresURL:        os.Getenv("LLM_AGENT_MEMORY_PG_URL"),
-		SessionIdleTTL:     defaultSessionIdleTTL,
-		RecallMode:         defaultRecallMode,
-		VectorTable:        defaultVectorTable,
-		VectorDimension:    defaultVectorDim,
-		VectorIndex:        defaultVectorIndex,
-		OutboxPollInterval: defaultOutboxPoll,
-		OutboxBatchSize:    defaultOutboxBatch,
+		ListenAddr:               defaultListenAddr,
+		PostgresURL:              os.Getenv("LLM_AGENT_MEMORY_PG_URL"),
+		SessionIdleTTL:           defaultSessionIdleTTL,
+		RecallMode:               defaultRecallMode,
+		VectorTable:              defaultVectorTable,
+		VectorDimension:          defaultVectorDim,
+		VectorIndex:              defaultVectorIndex,
+		OutboxPollInterval:       defaultOutboxPoll,
+		OutboxBatchSize:          defaultOutboxBatch,
+		TraceSinkBufferSize:      defaultTraceSinkBufferSize,
+		TraceSinkBatchSize:       defaultTraceSinkBatchSize,
+		TraceSinkShutdownTimeout: defaultTraceSinkShutdown,
+		StorageMetricsInterval:   defaultStorageMetricsCycle,
 	}
 
 	if listenAddr := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_ADDR"); listenAddr != "" {
@@ -156,6 +190,58 @@ func LoadFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_EMBED_COST_MICROS: %w", err)
 		}
 		cfg.EmbeddingCostMicrosPerToken = cost
+	}
+
+	if bufValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER"); bufValue != "" {
+		bufSize, err := strconv.Atoi(bufValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER: %w", err)
+		}
+		if bufSize <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER must be > 0")
+		}
+		cfg.TraceSinkBufferSize = bufSize
+	}
+
+	if batchValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH"); batchValue != "" {
+		batchSize, err := strconv.Atoi(batchValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH: %w", err)
+		}
+		if batchSize <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH must be > 0")
+		}
+		cfg.TraceSinkBatchSize = batchSize
+	}
+
+	if shutValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN"); shutValue != "" {
+		shut, err := time.ParseDuration(shutValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN: %w", err)
+		}
+		if shut <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN must be > 0")
+		}
+		cfg.TraceSinkShutdownTimeout = shut
+	}
+
+	if storageValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL"); storageValue != "" {
+		interval, err := time.ParseDuration(storageValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL: %w", err)
+		}
+		if interval <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL must be > 0")
+		}
+		cfg.StorageMetricsInterval = interval
+	}
+
+	if retentionValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION"); retentionValue != "" {
+		retention, err := strconv.ParseBool(retentionValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION: %w", err)
+		}
+		cfg.TraceRetentionEnabled = retention
 	}
 
 	return cfg, nil

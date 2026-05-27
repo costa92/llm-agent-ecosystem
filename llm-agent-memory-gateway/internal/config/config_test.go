@@ -277,3 +277,133 @@ func TestLoadFromEnv_EmbeddingCostMicrosPerTokenOverride(t *testing.T) {
 		t.Fatalf("EmbeddingCostMicrosPerToken = %d, want 75", cfg.EmbeddingCostMicrosPerToken)
 	}
 }
+
+func TestLoadFromEnv_TraceSinkBufferSizeDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkBufferSize != 1024 {
+		t.Fatalf("TraceSinkBufferSize = %d, want 1024 (default)", cfg.TraceSinkBufferSize)
+	}
+}
+
+func TestLoadFromEnv_TraceSinkBufferSizeOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BUFFER", "256")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkBufferSize != 256 {
+		t.Fatalf("TraceSinkBufferSize = %d, want 256", cfg.TraceSinkBufferSize)
+	}
+}
+
+func TestLoadFromEnv_TraceSinkBatchSizeDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkBatchSize != 50 {
+		t.Fatalf("TraceSinkBatchSize = %d, want 50 (default)", cfg.TraceSinkBatchSize)
+	}
+}
+
+func TestLoadFromEnv_TraceSinkBatchSizeOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_BATCH", "20")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkBatchSize != 20 {
+		t.Fatalf("TraceSinkBatchSize = %d, want 20", cfg.TraceSinkBatchSize)
+	}
+}
+
+func TestLoadFromEnv_TraceSinkShutdownTimeoutDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkShutdownTimeout != 5*time.Second {
+		t.Fatalf("TraceSinkShutdownTimeout = %v, want 5s (default)", cfg.TraceSinkShutdownTimeout)
+	}
+}
+
+func TestLoadFromEnv_TraceSinkShutdownTimeoutOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_SHUTDOWN", "2s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceSinkShutdownTimeout != 2*time.Second {
+		t.Fatalf("TraceSinkShutdownTimeout = %v, want 2s", cfg.TraceSinkShutdownTimeout)
+	}
+}
+
+func TestLoadFromEnv_StorageMetricsIntervalDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.StorageMetricsInterval != 5*time.Minute {
+		t.Fatalf("StorageMetricsInterval = %v, want 5m (default)", cfg.StorageMetricsInterval)
+	}
+}
+
+func TestLoadFromEnv_StorageMetricsIntervalOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_STORAGE_INTERVAL", "30s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.StorageMetricsInterval != 30*time.Second {
+		t.Fatalf("StorageMetricsInterval = %v, want 30s", cfg.StorageMetricsInterval)
+	}
+}
+
+func TestLoadFromEnv_TraceRetentionEnabledDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.TraceRetentionEnabled {
+		t.Fatal("TraceRetentionEnabled = true, want false (default)")
+	}
+}
+
+func TestLoadFromEnv_TraceRetentionEnabledOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION", "true")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.TraceRetentionEnabled {
+		t.Fatal("TraceRetentionEnabled = false, want true")
+	}
+}
