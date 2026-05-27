@@ -1,0 +1,5 @@
+// Package memorygateway is the HTTP gateway and service-composition layer for
+// llm-agent-memory. It owns transport, auth-derived scope binding, runtime
+// configuration, and backend wiring over the SDK plus concrete durable
+// backends.
+package memorygateway
