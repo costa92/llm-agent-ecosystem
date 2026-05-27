@@ -149,5 +149,25 @@ func (s *Store) migrationStatements() []string {
 			s.outboxTable(), s.outboxTable()),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_event_id_idx ON %s (event_id)`,
 			s.outboxTable(), s.outboxTable()),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			trace_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			tenant_id  TEXT NOT NULL,
+			request_id TEXT,
+			stage      TEXT NOT NULL,
+			reason     TEXT NOT NULL,
+			memory_id  TEXT,
+			version    BIGINT,
+			emitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			emitter    TEXT NOT NULL,
+			payload    JSONB
+		)`, s.memoryDecisionTraceTable()),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_tenant_time_idx ON %s (tenant_id, emitted_at DESC)`,
+			s.memoryDecisionTraceTable(), s.memoryDecisionTraceTable()),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_request_idx ON %s (request_id) WHERE request_id IS NOT NULL`,
+			s.memoryDecisionTraceTable(), s.memoryDecisionTraceTable()),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_stage_reason_idx ON %s (stage, reason)`,
+			s.memoryDecisionTraceTable(), s.memoryDecisionTraceTable()),
+		fmt.Sprintf(`COMMENT ON COLUMN %s.reason IS 'free-form in v1.x (M7); enum frozen in v2 (M8)'`,
+			s.memoryDecisionTraceTable()),
 	}
 }

@@ -6,6 +6,15 @@ documented in this file.
 <!-- Keep a Changelog format: https://keepachangelog.com/en/1.1.0/ -->
 <!-- Semver: https://semver.org/ -->
 
+## [Unreleased]
+
+### Added
+
+- `memory_decision_trace` table and three supporting indexes (tenant+time,
+  request, stage+reason) appended to the existing migration sequence for the
+  M7 validation-telemetry + decision-trace work. `reason` column is free-form
+  in v1.x and will be frozen to an enum in v2 (M8).
+
 ## [0.1.0] - 2026-05-26
 
 ### Added

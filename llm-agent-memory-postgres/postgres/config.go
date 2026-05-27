@@ -47,6 +47,10 @@ func (s *Store) outboxTable() string {
 	return s.tableName("outbox_event")
 }
 
+func (s *Store) memoryDecisionTraceTable() string {
+	return s.tableName("memory_decision_trace")
+}
+
 func (s *Store) tableName(base string) string {
 	if s.cfg.TablePrefix == "" {
 		return base

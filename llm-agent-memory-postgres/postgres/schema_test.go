@@ -85,6 +85,84 @@ func TestMigrate_RejectsFutureSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestMigrate_CreatesDecisionTraceTable(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m7_%d_trace", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	assertTableExists(t, ctx, pool, s.memoryDecisionTraceTable())
+}
+
+func TestMigrate_DecisionTraceIndexes(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m7_%d_idx", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	table := s.memoryDecisionTraceTable()
+	for _, idx := range []string{
+		table + "_tenant_time_idx",
+		table + "_request_idx",
+		table + "_stage_reason_idx",
+	} {
+		assertIndexExists(t, ctx, pool, table, idx)
+	}
+}
+
+func TestMigrate_DecisionTraceIdempotent(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m7_%d_idem", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate first run: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate second run: %v", err)
+	}
+
+	assertTableExists(t, ctx, pool, s.memoryDecisionTraceTable())
+}
+
+func assertIndexExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table, index string) {
+	t.Helper()
+	var exists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_indexes
+			WHERE schemaname = current_schema()
+			  AND tablename = $1
+			  AND indexname = $2
+		)`,
+		table, index,
+	).Scan(&exists); err != nil {
+		t.Fatalf("index exists query for %s on %s: %v", index, table, err)
+	}
+	if !exists {
+		t.Fatalf("expected index %s on table %s to exist", index, table)
+	}
+}
+
 func assertTableExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table string) {
 	t.Helper()
 	var exists bool
