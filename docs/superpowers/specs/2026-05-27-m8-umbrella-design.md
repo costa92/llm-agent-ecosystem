@@ -38,7 +38,7 @@ Spec claims here are grounded in code at `b182c95` on `main`. Items marked **(v2
 
 ### 2.5 scoredStore in core (`llm-agent/memory/internal_score.go` + dependencies)
 
-Single `sync.Mutex`. **(v2 correction — lift scope was under-claimed in v1.)** `WorkingMemory` (`working.go:48,77,95,121`) and `persistence.go` (`:79,105`) bind `*scoredStore` directly. Sibling `consolidator_test.go:94` and `testutil_test.go:54` depend on core export/import round-trip. The `MemoryItem` type (`memory.go:25-30`), `Kind` enum, `Stats`, and `Memory` interface all live in core and are imported by the sibling. A lift requires moving 5+ files plus updating ≥6 sibling imports.
+Single `sync.Mutex`. **(v2.1 correction — lift scope under-counted again at v2, now corrected via third-round verification.)** `*scoredStore` is bound by FOUR memory-type files: `working.go:48,77,95,121` (WorkingMemory), `episodic.go:18` (EpisodicMemory), `semantic.go:18` (SemanticMemory), plus indirect bindings through `recall.go:140` (`listFromStore`) and `manager.go:438,442` (`storeOf` accessor). `persistence.go:79,105` binds it for snapshot/import. Sibling `consolidator_test.go:94` and `testutil_test.go:54` depend on core export/import round-trip. The `MemoryItem` type (`memory.go:25-30`), `Kind` enum, `Stats`, and `Memory` interface all live in core and are imported by the sibling. **A lift requires moving ~8 files (internal_score.go + memory.go + working.go + episodic.go + semantic.go + recall.go + manager.go's storeOf + persistence.go) plus updating ≥6 sibling imports.**
 
 **No benchmark harness exists in `llm-agent/memory/`.** `rg '^func Benchmark'` returns zero. M8c's "≥2× throughput improvement" claim has no baseline measurement infrastructure.
 
@@ -56,7 +56,8 @@ The vector projector's outbox consumer dispatches on `EventType` and ignores unk
 M8a-prep (infrastructure: enables everything else)
     ├── upgrade migration framework to support staged transitions
     ├── relay delivery hardening (write `processing` state, per-row ack)
-    └── event-type allowlist extension for `memory_promoted` and `memory_dedupe_collapsed`
+    ├── event-type allowlist extension for `memory_promoted` and `memory_dedupe_collapsed`
+    └── vector projector switch-statement: add `case "memory_dedupe_collapsed"` arm that removes loser's vector chunks (allowlist alone won't dispatch — see §4.3 step 4)
     ↓
 M8a (substrate)
     ├── Working-tier rollout (expand-first; see §4.1 — 4 phases)
@@ -216,7 +217,7 @@ type Deduper interface {
 1. Backend transaction inserts into `memory_dedupe_index`; the `UNIQUE` constraint deterministically picks the first writer as winner. The loser's transaction sees the constraint violation and reads the winner row.
 2. Backend writes loser's `memory_record.deleted = TRUE` (schema already supports this — column exists).
 3. Backend emits a **new event type `memory_dedupe_collapsed`** with payload `{winner_id, loser_id, tenant_id}`. M8a-prep already extended the allowlist for this value.
-4. Vector projector subscribes to `memory_dedupe_collapsed` and removes the loser's vector chunks.
+4. Vector projector handles `memory_dedupe_collapsed` and removes the loser's vector chunks. **(v2.1 correction.)** The projector's `outbox_vector_publisher.go:31-72` is a hard-coded switch on event type with a `default → "unsupported_event"` no-op branch. **Adding the event to the allowlist alone is not sufficient** — M8a-prep must commit to adding an explicit `case "memory_dedupe_collapsed"` arm that calls the equivalent of `ProjectRemove(ctx, loserID)`. This is a code-handler deliverable, not just config.
 5. Any *pending* outbox rows for the loser memory_id reach the projector AFTER the collapse event; the projector's existing `GetRecord` check returns the loser as `deleted` and the publisher marks the row stale (existing behavior at `outbox_vector_publisher.go:35,42`).
 
 **Net property:** the loser is removed from durable storage AND from vector indexes AND its remaining outbox messages are non-destructive (they no-op against the deleted record). No orphans.
@@ -241,7 +242,7 @@ M8c's first deliverable is a **benchmark harness** in `llm-agent-memory/memory/i
 
 The lift then proceeds as a **package-cluster move**:
 
-1. Copy `internal_score.go`, `memory.go` (for `MemoryItem`, `Kind`, `Stats`), `persistence.go` (snapshot/import helpers), `working.go` (for `WorkingMemory`'s direct `*scoredStore` dependency).
+1. Copy 8 core files: `internal_score.go`, `memory.go` (for `MemoryItem`, `Kind`, `Stats`, `Memory` interface), `persistence.go` (snapshot/import helpers), `working.go` (`WorkingMemory`'s direct `*scoredStore` dependency), `episodic.go` + `semantic.go` (same — verified during v2.1 review), `recall.go` (`listFromStore` is `*scoredStore`-typed), and the `storeOf` accessor from `manager.go`.
 2. Update sibling files that import from core: `recall_engine.go`, `consolidator.go`, `parallel_search.go`, `manager.go`, `consolidator_test.go`, `testutil_test.go` (6 files, verified during v2 review).
 3. Core retains the original files as deprecation patches (announce in core CHANGELOG; final patch tag).
 4. Refactor concurrency in the sibling-local copy. Strategy decided by benchmark, not opinion. The benchmark target is "≥2× concurrent-read throughput at 10k items" (roadmap exit criterion).
@@ -368,3 +369,7 @@ All 20 findings have an explicit landing place. Nothing was silently dropped.
 - **W-3.** §4.6's threshold (10k rows / 14 days) is operator-friendly but assumes M7 actually gets staging traffic of that scale. If M7 sits idle longer than 14 days, M8d delays automatically — feature, not bug.
 - **W-4.** §4.7's lockstep tagging policy is a coordination rule, not a tooling enforcement. A future contributor could ship `llm-agent-memory v1.2.0` without bumping postgres or gateway. Tooling-side enforcement (CI check) is M8a-prep-adjacent but not in scope here.
 - **W-5.** The Promoter / Deduper interface-extension pattern works for current callers, but if a future caller wants atomic "promote-and-dedupe-in-one-tx" semantics, they'd need a composite operation that doesn't exist in either interface. Recognized; designed-in if needed at sub-milestone spec time.
+- **W-6 (from v2.1 review).** §4.1 Phase 5 (drop old constraint) is described as "delayed long enough" — informal. M8d-tail sub-spec must pin an objective gate: e.g., "no row with `kind NOT IN ('working','episodic','semantic')` for ≥7 consecutive days in staging + production." Without this, Phase 5 risks dropping a constraint while ambiguous rows survive.
+- **W-7 (from v2.1 review).** §4.2's `Promoter.Promote` semantics around `ExpectedVersion` are not pinned: does the Postgres impl re-read under row-lock, or does it trust the caller's `ExpectedVersion` and let the worker retry on `ErrVersionConflict`? Both are valid; the umbrella punts to M8a sub-spec. Recommend re-read under row-lock (matches existing `mutateRecord` pattern) and document there.
+- **W-8 (from v2.1 review).** §4.7's lockstep tagging is a coordination rule with no CI tooling today. M8a-prep sub-spec should add a `make verify-lockstep` script that fails CI if a sibling's `go.mod` references an unpublished tag.
+- **W-9 (from v2.1 review).** §4.1's dual-write window (Phase 3) has an unspecified idempotency-replay edge case: if a Phase-3 write fails after the new constraint exists but before the old is dropped, replays of the same `idempotency_key` will return failure. Documented; will not affect sub-milestone branching. M8a sub-spec should clarify.
