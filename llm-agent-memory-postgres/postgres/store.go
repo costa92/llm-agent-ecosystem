@@ -324,6 +324,9 @@ func (s *Store) lookupIdempotentWrite(ctx context.Context, q queryRower, in core
 }
 
 func (s *Store) AppendEvent(ctx context.Context, event corememory.StoredEvent) error {
+	if err := validateEventType(event.EventType); err != nil {
+		return err
+	}
 	raw, err := encodeJSON(event)
 	if err != nil {
 		return fmt.Errorf("memory/postgres: encode event payload: %w", err)
@@ -386,6 +389,9 @@ func (s *Store) SaveIdempotency(ctx context.Context, entry corememory.Idempotenc
 }
 
 func (s *Store) EnqueueOutbox(ctx context.Context, msg corememory.OutboxMessage) error {
+	if err := validateEventType(msg.EventType); err != nil {
+		return err
+	}
 	raw, err := encodeJSON(msg)
 	if err != nil {
 		return fmt.Errorf("memory/postgres: encode outbox payload: %w", err)
@@ -415,6 +421,9 @@ func isNoRows(err error) bool {
 }
 
 func (s *Store) mutateRecord(ctx context.Context, in mutationInput) (corememory.MemoryRecord, error) {
+	if err := validateEventType(in.eventType); err != nil {
+		return corememory.MemoryRecord{}, err
+	}
 	if in.tenantID == "" || in.memoryID == "" {
 		return corememory.MemoryRecord{}, ErrNotFound
 	}

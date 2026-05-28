@@ -64,6 +64,57 @@ func TestValidateEventType_RejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestAppendEvent_RejectsInvalidEventType(t *testing.T) {
+	// No DB required: validation happens before any pool call.
+	s := &Store{}
+	err := s.AppendEvent(nil, corememory.StoredEvent{ //nolint:staticcheck
+		MemoryID:  "mem_1",
+		TenantID:  "tenant_1",
+		EventType: "memry_created", // deliberate typo
+		Version:   1,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid event type")
+	}
+	if !errors.Is(err, ErrInvalidEventType) {
+		t.Fatalf("err = %v, want ErrInvalidEventType", err)
+	}
+}
+
+func TestEnqueueOutbox_RejectsInvalidEventType(t *testing.T) {
+	s := &Store{}
+	err := s.EnqueueOutbox(nil, corememory.OutboxMessage{ //nolint:staticcheck
+		MemoryID:  "mem_1",
+		TenantID:  "tenant_1",
+		EventID:   "evt_1",
+		EventType: "memry_created",
+		Version:   1,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid event type")
+	}
+	if !errors.Is(err, ErrInvalidEventType) {
+		t.Fatalf("err = %v, want ErrInvalidEventType", err)
+	}
+}
+
+func TestMutateRecord_RejectsInvalidEventType(t *testing.T) {
+	s := &Store{}
+	_, err := s.mutateRecord(nil, mutationInput{ //nolint:staticcheck
+		tenantID:        "tenant_1",
+		memoryID:        "mem_1",
+		expectedVersion: 1,
+		eventType:       "memry_updated", // deliberate typo
+		apply:           func(*corememory.MemoryRecord, time.Time) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid event type")
+	}
+	if !errors.Is(err, ErrInvalidEventType) {
+		t.Fatalf("err = %v, want ErrInvalidEventType", err)
+	}
+}
+
 func TestPostgresSurface_Compiles(t *testing.T) {
 	var (
 		_ error = ErrVersionConflict
