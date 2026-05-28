@@ -238,6 +238,72 @@ func TestOutboxVectorPublisher_SkipsStaleUpsertEvent(t *testing.T) {
 	}
 }
 
+func TestOutboxVectorPublisher_MemoryPromoted_NoProjectionAndObservesNoop(t *testing.T) {
+	projector := &fakeVectorProjector{}
+	observer := &fakeOutboxObserver{}
+	publisher := NewOutboxVectorPublisher(&fakePublisherRecordStore{}, projector, observer)
+
+	err := publisher.Publish(context.Background(), corememory.OutboxMessage{
+		EventType: "memory_promoted",
+		MemoryID:  "mem_prom",
+		TenantID:  "tenant-a",
+		Version:   7,
+		Record: corememory.MemoryRecord{
+			MemoryID: "mem_prom",
+			TenantID: "tenant-a",
+			Version:  7,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if len(projector.upserts) != 0 || len(projector.removes) != 0 {
+		t.Fatalf("projector mutated = %+v (memory_promoted must not project)", projector)
+	}
+	if len(observer.events) != 1 {
+		t.Fatalf("observer events = %d, want 1", len(observer.events))
+	}
+	if observer.events[0].Status != "promoted_noop" {
+		t.Fatalf("status = %q, want promoted_noop", observer.events[0].Status)
+	}
+	if observer.events[0].EventVersion != 7 {
+		t.Fatalf("event_version = %d, want 7", observer.events[0].EventVersion)
+	}
+}
+
+func TestOutboxVectorPublisher_MemoryDedupeCollapsed_NoProjectionAndObservesCollapse(t *testing.T) {
+	projector := &fakeVectorProjector{}
+	observer := &fakeOutboxObserver{}
+	publisher := NewOutboxVectorPublisher(&fakePublisherRecordStore{}, projector, observer)
+
+	err := publisher.Publish(context.Background(), corememory.OutboxMessage{
+		EventType: "memory_dedupe_collapsed",
+		MemoryID:  "mem_loser",
+		TenantID:  "tenant-a",
+		Version:   3,
+		Record: corememory.MemoryRecord{
+			MemoryID: "mem_loser",
+			TenantID: "tenant-a",
+			Version:  3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if len(projector.upserts) != 0 || len(projector.removes) != 0 {
+		t.Fatalf("projector mutated = %+v (memory_dedupe_collapsed cleanup is via memory_deleted)", projector)
+	}
+	if len(observer.events) != 1 {
+		t.Fatalf("observer events = %d, want 1", len(observer.events))
+	}
+	if observer.events[0].Status != "dedupe_collapsed_observed" {
+		t.Fatalf("status = %q, want dedupe_collapsed_observed", observer.events[0].Status)
+	}
+	if observer.events[0].EventVersion != 3 {
+		t.Fatalf("event_version = %d, want 3", observer.events[0].EventVersion)
+	}
+}
+
 func TestOutboxVectorPublisher_PropagatesTruthSourceError(t *testing.T) {
 	projector := &fakeVectorProjector{}
 	records := &fakePublisherRecordStore{err: errors.New("db down")}

@@ -49,6 +49,20 @@ func (p *OutboxVectorPublisher) Publish(ctx context.Context, msg corememory.Outb
 		}
 		p.observe(ctx, msg, "projected", current.Version, "upsert")
 		return nil
+	case "memory_promoted":
+		// Promotion is a state-only event: the underlying memory_record
+		// already exists and was projected at memory_created time. No
+		// vector mutation is needed; the observation lets metrics keep
+		// the per-event counter shape consistent.
+		p.observe(ctx, msg, "promoted_noop", msg.Version, "")
+		return nil
+	case "memory_dedupe_collapsed":
+		// Dedupe collapse marks one memory as the "loser" of a merge.
+		// The actual loser cleanup (vector removal) is emitted as a
+		// matching memory_deleted event in the same M8a transaction,
+		// so this case only records that the collapse happened.
+		p.observe(ctx, msg, "dedupe_collapsed_observed", msg.Version, "")
+		return nil
 	case "memory_disabled", "memory_deleted":
 		current, ok, err := p.currentRecord(ctx, msg)
 		if err != nil && !errors.Is(err, pgmemory.ErrNotFound) {
