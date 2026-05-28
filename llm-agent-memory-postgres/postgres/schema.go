@@ -261,8 +261,16 @@ func (s *Store) v1Statements() []string {
 
 // v2RelayLeaseStatements is the schema group v2 — relay lease columns on the
 // outbox table plus a partial index for the claim-expired-lease query.
-// Task 3 fills this; for Task 1 it is intentionally empty so Migrate() records
-// v2 but applies no DDL.
+// All ADD COLUMN clauses use IF NOT EXISTS (Postgres 9.6+) so a partial-failure
+// re-run is idempotent without needing a DO $$ ... EXCEPTION wrapper.
 func (s *Store) v2RelayLeaseStatements() []string {
-	return nil
+	outbox := s.outboxTable()
+	return []string{
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS claimed_by TEXT`, outbox),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`, outbox),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`, outbox),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_lease_idx
+			ON %s (status, lease_expires_at)
+			WHERE status = 'processing'`, outbox, outbox),
+	}
 }

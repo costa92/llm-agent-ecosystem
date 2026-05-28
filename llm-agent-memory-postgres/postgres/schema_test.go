@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -425,6 +426,78 @@ func TestMigrate_FreshDB_AppliesAllGroups(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("version=%d count = %d, want 1", group.Version, count)
 		}
+	}
+}
+
+func TestMigrate_RelayLeaseColumns_Added(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_lease_cols", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	wantCols := map[string]string{
+		"claimed_by":       "text",
+		"claimed_at":       "timestamp with time zone",
+		"lease_expires_at": "timestamp with time zone",
+	}
+	for col, wantType := range wantCols {
+		var dataType string
+		var isNullable string
+		err := pool.QueryRow(ctx,
+			`SELECT data_type, is_nullable
+			 FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+			   AND table_name = $1
+			   AND column_name = $2`,
+			s.outboxTable(), col,
+		).Scan(&dataType, &isNullable)
+		if err != nil {
+			t.Fatalf("column %q lookup: %v", col, err)
+		}
+		if dataType != wantType {
+			t.Fatalf("column %q data_type = %q, want %q", col, dataType, wantType)
+		}
+		if isNullable != "YES" {
+			t.Fatalf("column %q is_nullable = %q, want YES", col, isNullable)
+		}
+	}
+}
+
+func TestMigrate_RelayLeaseIndex_PartialOnProcessing(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_lease_idx", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	idxName := s.outboxTable() + "_lease_idx"
+	var indexDef string
+	if err := pool.QueryRow(ctx,
+		`SELECT indexdef FROM pg_indexes
+		 WHERE schemaname = current_schema()
+		   AND tablename = $1
+		   AND indexname = $2`,
+		s.outboxTable(), idxName,
+	).Scan(&indexDef); err != nil {
+		t.Fatalf("look up index %s: %v", idxName, err)
+	}
+	// The partial predicate must reference status='processing'. Postgres
+	// canonicalizes this to "WHERE (status = 'processing'::text)".
+	if !strings.Contains(indexDef, "processing") {
+		t.Fatalf("indexdef = %q, want partial WHERE on status='processing'", indexDef)
 	}
 }
 
