@@ -548,6 +548,119 @@ func TestAck_RejectsExpiredLease(t *testing.T) {
 	}
 }
 
+func TestRelease_ClearsOwnedLeasesPreservesAttemptCount(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_release_owned", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-release", 5)
+
+	// Snapshot attempt_count after claim — should be 1.
+	var attemptBefore int
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT attempt_count FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&attemptBefore); err != nil {
+		t.Fatalf("read attempt_count before: %v", err)
+	}
+	if attemptBefore != 1 {
+		t.Fatalf("attempt_count before = %d, want 1", attemptBefore)
+	}
+
+	if err := relay.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	// Status flipped back to pending, lease cleared, attempt_count unchanged.
+	var status string
+	var claimedBy *string
+	var leaseExpiresAt *time.Time
+	var attemptAfter int
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, claimed_by, lease_expires_at, attempt_count FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &claimedBy, &leaseExpiresAt, &attemptAfter); err != nil {
+		t.Fatalf("read row after release: %v", err)
+	}
+	if status != outboxStatusPending {
+		t.Fatalf("status = %s, want pending", status)
+	}
+	if claimedBy != nil {
+		t.Fatalf("claimed_by = %v, want nil", *claimedBy)
+	}
+	if leaseExpiresAt != nil {
+		t.Fatalf("lease_expires_at = %v, want nil", *leaseExpiresAt)
+	}
+	if attemptAfter != attemptBefore {
+		t.Fatalf("attempt_count after = %d, want %d (Release MUST NOT decrement)", attemptAfter, attemptBefore)
+	}
+}
+
+func TestRelease_DoesNotClearOtherWorkersLeases(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_release_other", time.Now().UnixNano())
+	s, _, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-owner", 5)
+
+	// A different relay (different workerID) calls Release.
+	otherRelay, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     60 * time.Second,
+		MaxAttempts:  5,
+		WorkerIDFunc: func() string { return "worker-intruder" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	if err := otherRelay.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	// Row is still owned by worker-owner.
+	var status string
+	var claimedBy *string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, claimed_by FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &claimedBy); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != outboxStatusProcessing {
+		t.Fatalf("status = %s, want processing (intruder must not have touched it)", status)
+	}
+	if claimedBy == nil || *claimedBy != "worker-owner" {
+		t.Fatalf("claimed_by = %v, want worker-owner", claimedBy)
+	}
+}
+
+func TestRelease_NoOpOnFreshRelay(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_release_fresh", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	relay, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize: 10, LeaseTTL: 60 * time.Second, MaxAttempts: 5,
+		WorkerIDFunc: func() string { return "worker-fresh" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+
+	// No claimed rows; Release should be a no-op without error.
+	if err := relay.Release(ctx); err != nil {
+		t.Fatalf("Release on fresh relay: %v", err)
+	}
+}
+
 // stealingPublisher publishes successfully but mutates the outbox row to
 // steal its lease (claimed_by='thief') before returning, so the subsequent
 // Ack inside RunOnce sees a stolen lease and returns ErrLeaseLost.

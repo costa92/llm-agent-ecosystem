@@ -317,6 +317,36 @@ SET status = $3,
 	return nil
 }
 
+// Release clears every lease currently owned by this worker, flipping each
+// owned row back to 'pending' so a peer (or the same worker on next start)
+// can immediately re-claim it without waiting for the lease TTL to expire.
+//
+// By design Release does NOT decrement attempt_count — the claim that
+// preceded the release still counts toward the retry budget. This is a
+// deliberate spec choice (§4.7): graceful shutdown is not a free retry,
+// because the publish may have been only partially completed at the
+// downstream system.
+//
+// Release is intended for use in the gateway shutdown sequence (PreStop /
+// terminationGracePeriodSeconds window). Errors are returned to the caller
+// but production wiring treats them as best-effort and logs rather than
+// propagates.
+func (r *Relay) Release(ctx context.Context) error {
+	_, err := r.store.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+SET status = $1,
+    claimed_by = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL
+WHERE claimed_by = $2 AND status = $3`, r.store.outboxTable()),
+		outboxStatusPending, r.workerID, outboxStatusProcessing,
+	)
+	if err != nil {
+		return fmt.Errorf("memory/postgres: release relay leases: %w", err)
+	}
+	return nil
+}
+
 // MemoryPublisher is the in-memory Publisher fake used by tests.
 type MemoryPublisher struct {
 	Events []corememory.OutboxMessage
