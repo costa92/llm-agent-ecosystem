@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -188,9 +189,17 @@ WHERE outbox_id = ANY($4)`, r.store.outboxTable()),
 	return out, nil
 }
 
-// RunOnce claims a batch, publishes each row, and acks the outcome. Task 9
-// rewrites this to continue on ack failure and aggregate errors; for now we
-// keep the simple sequential loop and surface the first ack error.
+// RunOnce claims a batch, publishes each row, and acks the outcome. Per spec
+// §4.6, ack failures are collected (not fatal) so a single hot row can't stall
+// progress on the rest of the batch. The aggregated error is returned via
+// errors.Join after the loop completes.
+//
+// Stats semantics:
+//   - Published: publish ok AND ack ok (the row is durably 'sent').
+//   - Failed:    publish failed AND ack ok (the row is now 'pending' for retry
+//     or 'failed' once attempts exhausted).
+//   - LeaseLost: ack returned ErrLeaseLost (the row was not mutated by this
+//     worker; some other worker now owns it or will when the lease expires).
 func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
 	claimed, err := r.ClaimBatch(ctx)
 	if err != nil {
@@ -198,11 +207,16 @@ func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
 	}
 
 	stats := RunStats{}
+	var ackErrs []error
 	for _, msg := range claimed {
 		publishErr := r.publisher.Publish(ctx, msg.Payload)
 		ackErr := r.Ack(ctx, msg.OutboxID, publishErr == nil, msg.AttemptCount, publishErr)
 		if ackErr != nil {
-			return stats, ackErr
+			if errors.Is(ackErr, ErrLeaseLost) {
+				stats.LeaseLost++
+			}
+			ackErrs = append(ackErrs, ackErr)
+			continue
 		}
 		if publishErr != nil {
 			stats.Failed++
@@ -210,7 +224,10 @@ func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
 		}
 		stats.Published++
 	}
-	return stats, nil
+	if len(ackErrs) == 0 {
+		return stats, nil
+	}
+	return stats, errors.Join(ackErrs...)
 }
 
 // Ack records the publish outcome for a claimed outbox row. The three UPDATEs

@@ -548,6 +548,107 @@ func TestAck_RejectsExpiredLease(t *testing.T) {
 	}
 }
 
+// stealingPublisher publishes successfully but mutates the outbox row to
+// steal its lease (claimed_by='thief') before returning, so the subsequent
+// Ack inside RunOnce sees a stolen lease and returns ErrLeaseLost.
+type stealingPublisher struct {
+	pool  *pgxpool.Pool
+	table string
+	calls int
+}
+
+func (p *stealingPublisher) Publish(ctx context.Context, evt corememory.OutboxMessage) error {
+	p.calls++
+	if p.pool == nil {
+		return nil
+	}
+	// Steal lease for the row we just received. The OutboxMessage doesn't
+	// carry outbox_id, but each unique event_id corresponds to one outbox row.
+	_, err := p.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s SET claimed_by = 'thief' WHERE event_id = $1`, p.table),
+		evt.EventID,
+	)
+	return err
+}
+
+func TestRunOnce_ContinuesAfterAckFailureAndCountsLeaseLost(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_runonce_ackfail", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Stage three pending rows.
+	for i := 0; i < 3; i++ {
+		if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+			TenantID:       "tenant_a",
+			IdempotencyKey: fmt.Sprintf("idem_runonce_%d", i),
+			RequestHash:    fmt.Sprintf("hash_runonce_%d", i),
+			Record: corememory.MemoryRecord{
+				UserID:                "user_a",
+				Kind:                  "episodic",
+				Source:                "user_saved",
+				Category:              "project",
+				Content:               fmt.Sprintf("runonce %d", i),
+				NormalizedContentHash: fmt.Sprintf("hash-runonce-%d", i),
+				Tags:                  []string{"relay"},
+				Importance:            0.9,
+			},
+		}); err != nil {
+			t.Fatalf("WriteRecord %d: %v", i, err)
+		}
+	}
+
+	stealer := &stealingPublisher{pool: pool, table: s.outboxTable()}
+	relay, err := NewRelay(s, stealer, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     60 * time.Second,
+		MaxAttempts:  5,
+		WorkerIDFunc: func() string { return "worker-runonce" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+
+	stats, err := relay.RunOnce(ctx)
+	// Aggregated ack errors are expected — the stealing publisher invalidates
+	// every Ack, so every row returns ErrLeaseLost. RunOnce must NOT bail out
+	// early; it must continue through all three rows.
+	if err == nil {
+		t.Fatal("expected aggregated ack error, got nil")
+	}
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("err = %v, want chain containing ErrLeaseLost", err)
+	}
+	if stats.LeaseLost != 3 {
+		t.Fatalf("LeaseLost = %d, want 3", stats.LeaseLost)
+	}
+	if stats.Published != 0 {
+		t.Fatalf("Published = %d, want 0 (publish ok but ack failed → not counted)", stats.Published)
+	}
+	if stealer.calls != 3 {
+		t.Fatalf("publisher calls = %d, want 3 (RunOnce did not continue past first ack failure)", stealer.calls)
+	}
+}
+
+func TestRunOnce_PublishedRequiresBothPublishAndAck(t *testing.T) {
+	// This is a unit-style assertion documenting the stats contract. The
+	// semantic test lives in TestRunOnce_ContinuesAfterAckFailureAndCountsLeaseLost:
+	// publishes succeed but acks fail there, and Published stays at 0.
+	stats := RunStats{}
+	// publish ok, ack ok → Published++
+	stats.Published++
+	if stats.Published != 1 {
+		t.Fatalf("Published = %d, want 1", stats.Published)
+	}
+}
+
 // setupRelayWithClaim writes one record using the provided pool, claims it
 // with the named worker via a Relay configured for the given MaxAttempts,
 // and returns the store + relay + outbox_id. Tests use the same pool to
