@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -76,7 +77,7 @@ func TestMigrate_RejectsFutureSchemaVersion(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (version) VALUES ($1)`, s.schemaVersionTable()),
-		HeadSchemaVersion+1,
+		HeadSchemaVersion+AcceptableSkewVersions+1,
 	); err != nil {
 		t.Fatalf("insert future version: %v", err)
 	}
@@ -273,6 +274,157 @@ func TestMigrate_TransactionalGroupRollsBackOnError(t *testing.T) {
 	}
 	if exists {
 		t.Fatalf("sentinel table exists; rollback failed")
+	}
+}
+
+func TestAcceptableSkewVersions_Constant(t *testing.T) {
+	if AcceptableSkewVersions != 5 {
+		t.Fatalf("AcceptableSkewVersions = %d, want 5", AcceptableSkewVersions)
+	}
+}
+
+func TestMigrate_NonTransactionalGroupRunsWithoutOuterTx(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_nontx", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Bootstrap v1 so the schema_version table exists.
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	group := migrationGroup{
+		Version:       42,
+		Transactional: false,
+		Statements: []string{
+			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_nontx (id INT)`, prefix),
+		},
+	}
+	if err := s.runGroupDirect(ctx, group); err != nil {
+		t.Fatalf("runGroupDirect: %v", err)
+	}
+	var exists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = current_schema() AND table_name = $1
+		)`,
+		prefix+"_nontx",
+	).Scan(&exists); err != nil {
+		t.Fatalf("check table: %v", err)
+	}
+	if !exists {
+		t.Fatalf("table not created by non-tx group")
+	}
+	var versionCount int
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE version = 42`, s.schemaVersionTable()),
+	).Scan(&versionCount); err != nil {
+		t.Fatalf("count version: %v", err)
+	}
+	if versionCount != 1 {
+		t.Fatalf("version 42 count = %d, want 1", versionCount)
+	}
+}
+
+func TestMigrate_TolerablyAheadDB_WarnsButProceeds(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_skew_ok", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("first Migrate: %v", err)
+	}
+	// Insert a future version within tolerance.
+	if _, err := pool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (version) VALUES ($1)`, s.schemaVersionTable()),
+		HeadSchemaVersion+2,
+	); err != nil {
+		t.Fatalf("insert future: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("tolerable-skew Migrate: %v", err)
+	}
+}
+
+func TestMigrate_TooFarAheadDB_ReturnsErrSchemaVersionAhead(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_skew_bad", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (version) VALUES ($1)`, s.schemaVersionTable()),
+		HeadSchemaVersion+AcceptableSkewVersions+1,
+	); err != nil {
+		t.Fatalf("insert future: %v", err)
+	}
+	err = s.Migrate(ctx)
+	if err == nil {
+		t.Fatal("expected error for too-far-ahead schema version")
+	}
+	if !errors.Is(err, ErrSchemaVersionAhead) {
+		t.Fatalf("err = %v, want ErrSchemaVersionAhead", err)
+	}
+}
+
+func TestCurrentSchemaVersion_RunsOnFreshDB(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_fresh_csv", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	v, err := s.currentSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("currentSchemaVersion on fresh db: %v", err)
+	}
+	if v != 0 {
+		t.Fatalf("currentSchemaVersion = %d, want 0", v)
+	}
+}
+
+func TestMigrate_FreshDB_AppliesAllGroups(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_fresh_all", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate on fresh db: %v", err)
+	}
+
+	// Each group's Version must be recorded.
+	for _, group := range s.migrationGroups() {
+		var count int
+		if err := pool.QueryRow(ctx,
+			fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE version = $1`, s.schemaVersionTable()),
+			group.Version,
+		).Scan(&count); err != nil {
+			t.Fatalf("query version row for v%d: %v", group.Version, err)
+		}
+		if count != 1 {
+			t.Fatalf("version=%d count = %d, want 1", group.Version, count)
+		}
 	}
 }
 

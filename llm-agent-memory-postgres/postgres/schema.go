@@ -13,6 +13,12 @@ const HeadSchemaVersion = 2
 // existing M5-M7 callers/tests. It now points at HeadSchemaVersion.
 const SchemaVersion = HeadSchemaVersion
 
+// AcceptableSkewVersions is the slack between a deployed code's HeadSchemaVersion
+// and the DB's current version that is tolerated (logged, but not fatal). This
+// lets rolling deploys land where a newer pod arrives at an older pod's database
+// without forcing a strict-equal version check.
+const AcceptableSkewVersions = 5
+
 // migrationGroup is a single, atomically-applied bundle of DDL statements
 // recorded under a specific schema version row.
 type migrationGroup struct {
@@ -26,9 +32,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if current > HeadSchemaVersion {
+	if current > HeadSchemaVersion+AcceptableSkewVersions {
 		return fmt.Errorf("%w: db=%d code=%d", ErrSchemaVersionAhead, current, HeadSchemaVersion)
 	}
+	// current > HeadSchemaVersion (but within AcceptableSkewVersions slack) is
+	// tolerable — a newer-version peer applied a future group ahead of us. We
+	// proceed without applying anything past `current`, and any groups <= current
+	// are skipped by the loop below. Logging is intentionally left to the caller
+	// (the gateway wires slog; the SDK has no logger contract).
 	for _, group := range s.migrationGroups() {
 		if group.Version <= current {
 			continue
