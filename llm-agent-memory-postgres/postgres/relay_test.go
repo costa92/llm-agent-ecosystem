@@ -827,6 +827,124 @@ func assertOutboxStatus(t *testing.T, ctx context.Context, pool dbQueryer, table
 	}
 }
 
+func TestLeaseAwarePublisher_NilHookActsLikeMemoryPublisher(t *testing.T) {
+	p := &LeaseAwarePublisher{}
+	payload := corememory.OutboxMessage{MemoryID: "mem_lap_1", EventType: "memory_created", Version: 1}
+	if err := p.Publish(context.Background(), payload); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if len(p.Events) != 1 || p.Events[0].MemoryID != payload.MemoryID {
+		t.Fatalf("events = %+v", p.Events)
+	}
+}
+
+func TestLeaseAwarePublisher_HookInvoked(t *testing.T) {
+	var seen []string
+	p := &LeaseAwarePublisher{
+		PublishHook: func(_ context.Context, msg corememory.OutboxMessage) error {
+			seen = append(seen, msg.MemoryID)
+			return nil
+		},
+	}
+	if err := p.Publish(context.Background(), corememory.OutboxMessage{MemoryID: "mem_hook_a", EventType: "memory_created", Version: 1}); err != nil {
+		t.Fatalf("Publish a: %v", err)
+	}
+	if err := p.Publish(context.Background(), corememory.OutboxMessage{MemoryID: "mem_hook_b", EventType: "memory_updated", Version: 2}); err != nil {
+		t.Fatalf("Publish b: %v", err)
+	}
+	if len(seen) != 2 || seen[0] != "mem_hook_a" || seen[1] != "mem_hook_b" {
+		t.Fatalf("hook saw = %v, want [mem_hook_a mem_hook_b]", seen)
+	}
+	if len(p.Events) != 2 {
+		t.Fatalf("events = %d, want 2 (hook returned nil → append)", len(p.Events))
+	}
+}
+
+func TestLeaseAwarePublisher_HookErrorSuppressesAppend(t *testing.T) {
+	hookErr := errors.New("transient hook failure")
+	p := &LeaseAwarePublisher{
+		PublishHook: func(_ context.Context, _ corememory.OutboxMessage) error {
+			return hookErr
+		},
+	}
+	err := p.Publish(context.Background(), corememory.OutboxMessage{MemoryID: "mem_hook_err", EventType: "memory_created", Version: 1})
+	if !errors.Is(err, hookErr) {
+		t.Fatalf("Publish err = %v, want hookErr", err)
+	}
+	if len(p.Events) != 0 {
+		t.Fatalf("events = %d, want 0 (hook errored → no append)", len(p.Events))
+	}
+}
+
+// TestRelay_LeaseExpiresDuringPublish_AckReturnsLeaseLost exercises the
+// "publish took longer than the lease TTL" scenario end-to-end: the publish
+// hook sleeps past the lease window, so by the time the relay's Ack runs
+// the ownership predicate (claimed_by + lease_expires_at > NOW()) fails
+// and Ack returns ErrLeaseLost. The row is therefore NOT marked sent —
+// some peer worker will pick it up after the lease expires.
+func TestRelay_LeaseExpiresDuringPublish_AckReturnsLeaseLost(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_lease_expiry", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+		TenantID:       "tenant_a",
+		IdempotencyKey: "idem_lease_expiry",
+		RequestHash:    "hash_lease_expiry",
+		Record: corememory.MemoryRecord{
+			UserID:                "user_a",
+			Kind:                  "episodic",
+			Source:                "user_saved",
+			Category:              "project",
+			Content:               "lease expiry",
+			NormalizedContentHash: "hash-lease-expiry",
+			Tags:                  []string{"relay"},
+			Importance:            0.9,
+		},
+	}); err != nil {
+		t.Fatalf("WriteRecord: %v", err)
+	}
+
+	publisher := &LeaseAwarePublisher{
+		PublishHook: func(_ context.Context, _ corememory.OutboxMessage) error {
+			// Sleep past the 100ms LeaseTTL so the ownership predicate
+			// (lease_expires_at > NOW()) is false when Ack runs.
+			time.Sleep(200 * time.Millisecond)
+			return nil
+		},
+	}
+	relay, err := NewRelay(s, publisher, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     100 * time.Millisecond,
+		MaxAttempts:  5,
+		WorkerIDFunc: func() string { return "worker-lease-expiry" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+
+	stats, err := relay.RunOnce(ctx)
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("RunOnce err = %v, want chain containing ErrLeaseLost", err)
+	}
+	if stats.LeaseLost != 1 {
+		t.Fatalf("LeaseLost = %d, want 1", stats.LeaseLost)
+	}
+	if stats.Published != 0 {
+		t.Fatalf("Published = %d, want 0 (publish ok but ack lost the lease)", stats.Published)
+	}
+	if len(publisher.Events) != 1 {
+		t.Fatalf("publisher.Events = %d, want 1 (hook returned nil so append happened)", len(publisher.Events))
+	}
+}
+
 func assertOutboxAttemptCount(t *testing.T, ctx context.Context, pool dbQueryer, table string, want int) {
 	t.Helper()
 	var got int
