@@ -407,3 +407,90 @@ func TestLoadFromEnv_TraceRetentionEnabledOverride(t *testing.T) {
 		t.Fatal("TraceRetentionEnabled = false, want true")
 	}
 }
+
+func TestLoadFromEnv_RelayLeaseTTLDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayLeaseTTL != 180*time.Second {
+		t.Fatalf("RelayLeaseTTL = %v, want 180s (default)", cfg.RelayLeaseTTL)
+	}
+}
+
+func TestLoadFromEnv_RelayLeaseTTLOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL", "45s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayLeaseTTL != 45*time.Second {
+		t.Fatalf("RelayLeaseTTL = %v, want 45s", cfg.RelayLeaseTTL)
+	}
+}
+
+func TestLoadFromEnv_RelayLeaseTTLRejectsNonPositive(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL", "0s")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected error for non-positive relay lease ttl")
+	}
+}
+
+func TestLoadFromEnv_RelayMaxAttemptsDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayMaxAttempts != 5 {
+		t.Fatalf("RelayMaxAttempts = %d, want 5 (default)", cfg.RelayMaxAttempts)
+	}
+}
+
+func TestLoadFromEnv_RelayMaxAttemptsOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS", "10")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayMaxAttempts != 10 {
+		t.Fatalf("RelayMaxAttempts = %d, want 10", cfg.RelayMaxAttempts)
+	}
+}
+
+func TestLoadFromEnv_RelayBatchSizeDefault(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayBatchSize != 100 {
+		t.Fatalf("RelayBatchSize = %d, want 100 (default)", cfg.RelayBatchSize)
+	}
+}
+
+func TestLoadFromEnv_RelayBatchSizeOverride(t *testing.T) {
+	t.Setenv("LLM_AGENT_MEMORY_PG_URL", "postgres://memory")
+	t.Setenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE", "25")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.RelayBatchSize != 25 {
+		t.Fatalf("RelayBatchSize = %d, want 25", cfg.RelayBatchSize)
+	}
+}

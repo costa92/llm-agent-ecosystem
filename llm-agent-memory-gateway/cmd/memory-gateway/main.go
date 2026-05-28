@@ -172,13 +172,30 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 						metrics.OutboxObserver(),
 					},
 				},
-			), pgmemory.RelayConfig{BatchSize: cfg.OutboxBatchSize})
+			), pgmemory.RelayConfig{
+				BatchSize:   cfg.RelayBatchSize,
+				LeaseTTL:    cfg.RelayLeaseTTL,
+				MaxAttempts: cfg.RelayMaxAttempts,
+			})
 			if err != nil {
 				for i := len(cleanupFns) - 1; i >= 0; i-- {
 					cleanupFns[i]()
 				}
 				return nil, nil, err
 			}
+			// Lease release MUST run before pool.Close. cleanupFns is LIFO
+			// (see the deferred cleanup at the bottom of buildHandler), and
+			// pool.Close is at index 0, so any cleanup appended after this
+			// point runs before pool.Close. We register Release here so an
+			// in-flight relay tick has its claimed rows flipped back to
+			// pending instead of waiting out the full lease TTL.
+			cleanupFns = append(cleanupFns, func() {
+				releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer releaseCancel()
+				if err := relay.Release(releaseCtx); err != nil {
+					logger.Error("memory gateway relay release failed", "error", err)
+				}
+			})
 			cleanupFns = append(cleanupFns, startOutboxRelayWorker(ctx, logger, cfg.OutboxPollInterval, relay))
 		}
 	}

@@ -21,6 +21,9 @@ const (
 	defaultTraceSinkBatchSize   = 50
 	defaultTraceSinkShutdown    = 5 * time.Second
 	defaultStorageMetricsCycle  = 5 * time.Minute
+	defaultRelayLeaseTTL        = 180 * time.Second
+	defaultRelayMaxAttempts     = 5
+	defaultRelayBatchSize       = 100
 )
 
 type Config struct {
@@ -71,6 +74,31 @@ type Config struct {
 	// treats retention as an operator obligation — see spec OD-5. Default
 	// false.
 	TraceRetentionEnabled bool
+
+	// RelayLeaseTTL bounds how long a single relay worker may hold a
+	// claimed outbox row before a peer can reclaim it. Default 180s; tune
+	// down for faster recovery from crashed pods (at the cost of more
+	// thrash if publishes are slow). Env
+	// `LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL`.
+	//
+	// Deployment guidance: `terminationGracePeriodSeconds` must be
+	// >= RelayLeaseTTL + ~10s slack so Release(ctx) can flip owned leases
+	// back to pending before the pod is killed.
+	RelayLeaseTTL time.Duration
+
+	// RelayMaxAttempts is the per-row retry budget the relay enforces.
+	// When attempt_count reaches this value and publish still fails, the
+	// row transitions to 'failed' and waits for an operator to
+	// RequeueFailed it. Default 5.
+	// Env `LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS`.
+	RelayMaxAttempts int
+
+	// RelayBatchSize is the maximum rows a single ClaimBatch will lock.
+	// Default 100. Env `LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE`.
+	// This supersedes OutboxBatchSize for the M8a-prep relay; the older
+	// knob is kept for compatibility but RelayBatchSize is the canonical
+	// source.
+	RelayBatchSize int
 }
 
 func LoadFromEnv() (Config, error) {
@@ -88,6 +116,9 @@ func LoadFromEnv() (Config, error) {
 		TraceSinkBatchSize:       defaultTraceSinkBatchSize,
 		TraceSinkShutdownTimeout: defaultTraceSinkShutdown,
 		StorageMetricsInterval:   defaultStorageMetricsCycle,
+		RelayLeaseTTL:            defaultRelayLeaseTTL,
+		RelayMaxAttempts:         defaultRelayMaxAttempts,
+		RelayBatchSize:           defaultRelayBatchSize,
 	}
 
 	if listenAddr := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_ADDR"); listenAddr != "" {
@@ -242,6 +273,39 @@ func LoadFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_TRACE_RETENTION: %w", err)
 		}
 		cfg.TraceRetentionEnabled = retention
+	}
+
+	if leaseTTLValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL"); leaseTTLValue != "" {
+		ttl, err := time.ParseDuration(leaseTTLValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL: %w", err)
+		}
+		if ttl <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL must be > 0")
+		}
+		cfg.RelayLeaseTTL = ttl
+	}
+
+	if maxAttemptsValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS"); maxAttemptsValue != "" {
+		max, err := strconv.Atoi(maxAttemptsValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS: %w", err)
+		}
+		if max <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS must be > 0")
+		}
+		cfg.RelayMaxAttempts = max
+	}
+
+	if batchValue := os.Getenv("LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE"); batchValue != "" {
+		size, err := strconv.Atoi(batchValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE: %w", err)
+		}
+		if size <= 0 {
+			return Config{}, errors.New("LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE must be > 0")
+		}
+		cfg.RelayBatchSize = size
 	}
 
 	return cfg, nil

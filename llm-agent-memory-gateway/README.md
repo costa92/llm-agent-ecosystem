@@ -45,7 +45,10 @@ This module depends on:
 - `LLM_AGENT_MEMORY_GATEWAY_VECTOR_NAMESPACE` optional, default empty
 - `LLM_AGENT_MEMORY_GATEWAY_VECTOR_INDEX` optional, `none|ivfflat|hnsw`, default `none`
 - `LLM_AGENT_MEMORY_GATEWAY_OUTBOX_POLL_INTERVAL` optional, default `1s`
-- `LLM_AGENT_MEMORY_GATEWAY_OUTBOX_BATCH_SIZE` optional, default `100`
+- `LLM_AGENT_MEMORY_GATEWAY_OUTBOX_BATCH_SIZE` optional, default `100` (legacy; superseded by `RELAY_BATCH_SIZE` below for the M8a-prep relay)
+- `LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL` optional, default `180s`
+- `LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS` optional, default `5`
+- `LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE` optional, default `100`
 
 ## Run
 
@@ -231,3 +234,54 @@ Tenant isolation is enforced two ways:
 - All counters bucket the tenant_id before storage. Two tenants in the same
   bucket share a metric value but neither tenant's identifier can be
   recovered from the counter — bucket aggregation is one-way.
+
+## M8a-prep: Relay hardening + graceful shutdown
+
+M8a-prep tightens the outbox relay's delivery semantics. Each row is now
+claimed under a worker-owned lease (`claimed_by`, `claimed_at`,
+`lease_expires_at`) so a crashed pod's work becomes reclaimable by a peer
+after the lease TTL elapses — no operator action required.
+
+### New runtime configuration
+
+| Env var | Default | Semantic |
+|---|---|---|
+| `LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL` | `180s` | Per-claim lease window. A peer reclaims the row once `lease_expires_at < NOW()`. Tune down for faster failover (at the cost of more thrash if publish is slow). |
+| `LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS` | `5` | Retry budget per row. After `attempt_count >= MaxAttempts`, the row transitions to `failed` and waits for `RequeueFailed`. |
+| `LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE` | `100` | Maximum rows per `ClaimBatch`. Supersedes `OUTBOX_BATCH_SIZE` for the M8a-prep relay. |
+
+### Deployment topology
+
+The relay supports graceful shutdown by calling `Relay.Release(ctx)` from
+the gateway's cleanup sequence (before `pool.Close`). Release flips every
+row currently held by this worker's `claimed_by` back to `pending` so a
+peer can immediately re-claim without waiting for the lease TTL.
+
+For Kubernetes deployments:
+
+- Set `terminationGracePeriodSeconds >= RelayLeaseTTL + 10s`. The +10s
+  is slack for the in-flight publish + the synchronous Release Exec; the
+  default lease TTL of 180s implies a minimum grace period of ~190s.
+- A `preStop` hook is not strictly required — the gateway's cleanup
+  registers Release at startup and runs it during normal SIGTERM
+  shutdown. Use preStop only if your platform delivers SIGKILL on
+  termination instead of SIGTERM.
+- Multiple replicas are safe: each pod generates a fresh
+  `<hostname>-<128-bit-hex>` worker identity at startup, so leases are
+  always pod-scoped. A pod that crashes mid-publish leaves its leases
+  in place until the TTL expires; a peer reclaims them at the next
+  `ClaimBatch`.
+
+### Operator API
+
+For rows that exhaust `RelayMaxAttempts` and land in `failed`:
+
+- `Store.ListFailed(ctx, limit)` — newest-first survey of failed rows
+  (outbox_id, aggregate_id, event_type, attempt_count, last_error,
+  created_at).
+- `Store.RequeueFailed(ctx, outboxID)` — flips a `failed` row back to
+  `pending` and resets `attempt_count` to 0. No-op on non-`failed`
+  rows; reports `RowsAffected` so operator tooling can detect typos.
+
+Postgres 11+ is required for the M8a-prep migration (nullable `ADD
+COLUMN` must be metadata-only).

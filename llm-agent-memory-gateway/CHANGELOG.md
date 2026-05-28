@@ -10,6 +10,26 @@ documented in this file.
 
 ### Added
 
+- M8a-prep relay wiring + event dispatch:
+  - Three new env vars threaded through `RelayConfig`:
+    - `LLM_AGENT_MEMORY_GATEWAY_RELAY_LEASE_TTL` (default `180s`)
+    - `LLM_AGENT_MEMORY_GATEWAY_RELAY_MAX_ATTEMPTS` (default `5`)
+    - `LLM_AGENT_MEMORY_GATEWAY_RELAY_BATCH_SIZE` (default `100`,
+      supersedes the legacy `OUTBOX_BATCH_SIZE` for the M8a-prep relay)
+  - `Relay.Release(ctx)` is now registered in the gateway shutdown
+    sequence **before** `pool.Close`, so an in-flight relay tick has its
+    claimed rows flipped back to `pending` instead of waiting out the
+    full lease TTL when the gateway terminates.
+  - Two new case arms in `OutboxVectorPublisher`:
+    - `memory_promoted` — observation-only (`status="promoted_noop"`);
+      no vector mutation. The underlying record was already projected
+      at `memory_created` time.
+    - `memory_dedupe_collapsed` — observation-only
+      (`status="dedupe_collapsed_observed"`). Loser cleanup is
+      emitted as a matching `memory_deleted` event in the same M8a
+      transaction; this arm records the collapse fact.
+  - Deployment topology guidance added to README: recommended
+    `terminationGracePeriodSeconds >= RelayLeaseTTL + ~10s` slack.
 - M7 validation telemetry and decision-trace persistence:
   - Best-effort async `PostgresDecisionTraceSink` that batch-inserts decision
     traces into `memory_decision_trace` (table migrated by
