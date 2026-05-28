@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,12 +15,62 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestEventTypeConstants_PromotedAndDedupeCollapsed(t *testing.T) {
+	// Compile-time sanity check: both new constants must exist with the
+	// canonical spec strings.
+	if eventTypeMemoryPromoted != "memory_promoted" {
+		t.Fatalf("eventTypeMemoryPromoted = %q, want memory_promoted", eventTypeMemoryPromoted)
+	}
+	if eventTypeMemoryDedupeCollapsed != "memory_dedupe_collapsed" {
+		t.Fatalf("eventTypeMemoryDedupeCollapsed = %q, want memory_dedupe_collapsed", eventTypeMemoryDedupeCollapsed)
+	}
+}
+
+func TestValidateEventType_AcceptsKnownTypes(t *testing.T) {
+	for _, et := range []string{
+		eventTypeMemoryCreated,
+		eventTypeMemoryUpdated,
+		eventTypeMemoryDeleted,
+		eventTypeMemoryPinned,
+		eventTypeMemoryUnpinned,
+		eventTypeMemoryDisabled,
+		eventTypeMemoryEnabled,
+		eventTypeMemoryPromoted,
+		eventTypeMemoryDedupeCollapsed,
+	} {
+		if err := validateEventType(et); err != nil {
+			t.Errorf("validateEventType(%q) = %v, want nil", et, err)
+		}
+	}
+}
+
+func TestValidateEventType_RejectsTypo(t *testing.T) {
+	err := validateEventType("memry_created") // deliberate typo
+	if err == nil {
+		t.Fatal("expected error for typo")
+	}
+	if !errors.Is(err, ErrInvalidEventType) {
+		t.Fatalf("err = %v, want ErrInvalidEventType", err)
+	}
+}
+
+func TestValidateEventType_RejectsEmpty(t *testing.T) {
+	err := validateEventType("")
+	if err == nil {
+		t.Fatal("expected error for empty event type")
+	}
+	if !errors.Is(err, ErrInvalidEventType) {
+		t.Fatalf("err = %v, want ErrInvalidEventType", err)
+	}
+}
+
 func TestPostgresSurface_Compiles(t *testing.T) {
 	var (
 		_ error = ErrVersionConflict
 		_ error = ErrIdempotencyConflict
 		_ error = ErrNotFound
 		_ error = ErrSchemaVersionAhead
+		_ error = ErrInvalidEventType
 	)
 
 	_, _ = New((*pgxpool.Pool)(nil), Config{})

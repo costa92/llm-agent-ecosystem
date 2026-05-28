@@ -12,17 +12,43 @@ import (
 )
 
 const (
-	eventTypeMemoryCreated  = "memory_created"
-	eventTypeMemoryUpdated  = "memory_updated"
-	eventTypeMemoryDeleted  = "memory_deleted"
-	eventTypeMemoryPinned   = "memory_pinned"
-	eventTypeMemoryUnpinned = "memory_unpinned"
-	eventTypeMemoryDisabled = "memory_disabled"
-	eventTypeMemoryEnabled  = "memory_enabled"
-	outboxStatusPending     = "pending"
-	outboxStatusProcessing  = "processing"
-	outboxStatusSent        = "sent"
+	eventTypeMemoryCreated         = "memory_created"
+	eventTypeMemoryUpdated         = "memory_updated"
+	eventTypeMemoryDeleted         = "memory_deleted"
+	eventTypeMemoryPinned          = "memory_pinned"
+	eventTypeMemoryUnpinned        = "memory_unpinned"
+	eventTypeMemoryDisabled        = "memory_disabled"
+	eventTypeMemoryEnabled         = "memory_enabled"
+	eventTypeMemoryPromoted        = "memory_promoted"
+	eventTypeMemoryDedupeCollapsed = "memory_dedupe_collapsed"
+	outboxStatusPending            = "pending"
+	outboxStatusProcessing         = "processing"
+	outboxStatusSent               = "sent"
 )
+
+// allowedEventTypes is the write-side allowlist of event-type strings the
+// memory outbox / event log will accept. Centralized here so AppendEvent,
+// EnqueueOutbox, and mutateRecord share a single source of truth — and so
+// typos at call sites are rejected at write time instead of leaking into
+// downstream consumers.
+var allowedEventTypes = map[string]struct{}{
+	eventTypeMemoryCreated:         {},
+	eventTypeMemoryUpdated:         {},
+	eventTypeMemoryDeleted:         {},
+	eventTypeMemoryPinned:          {},
+	eventTypeMemoryUnpinned:        {},
+	eventTypeMemoryDisabled:        {},
+	eventTypeMemoryEnabled:         {},
+	eventTypeMemoryPromoted:        {},
+	eventTypeMemoryDedupeCollapsed: {},
+}
+
+func validateEventType(eventType string) error {
+	if _, ok := allowedEventTypes[eventType]; !ok {
+		return fmt.Errorf("%w: %q", ErrInvalidEventType, eventType)
+	}
+	return nil
+}
 
 var _ corememory.RecordStore = (*Store)(nil)
 var _ corememory.EventStore = (*Store)(nil)
