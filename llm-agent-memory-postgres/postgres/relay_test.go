@@ -9,20 +9,70 @@ import (
 	corememory "github.com/costa92/llm-agent-memory/memory"
 )
 
-func TestRelay_RunOnceWithoutPendingRows(t *testing.T) {
-	r, err := NewRelay(&Store{}, &MemoryPublisher{}, 10)
-	if err != nil {
-		t.Fatalf("NewRelay: %v", err)
+func TestRelayConfig_Defaults(t *testing.T) {
+	cfg := defaultRelayConfig()
+	if cfg.BatchSize != 100 {
+		t.Fatalf("BatchSize = %d, want 100", cfg.BatchSize)
 	}
-	if r.batchSize != 10 {
-		t.Fatalf("batchSize = %d, want 10", r.batchSize)
+	if cfg.LeaseTTL != 180*time.Second {
+		t.Fatalf("LeaseTTL = %v, want 180s", cfg.LeaseTTL)
+	}
+	if cfg.MaxAttempts != 5 {
+		t.Fatalf("MaxAttempts = %d, want 5", cfg.MaxAttempts)
+	}
+	if cfg.WorkerIDFunc == nil {
+		t.Fatal("WorkerIDFunc is nil")
 	}
 }
 
-func TestRelay_NewRejectsNilPublisher(t *testing.T) {
-	_, err := NewRelay(&Store{}, nil, 1)
+func TestNewRelay_AppliesDefaultsForZeroFields(t *testing.T) {
+	r, err := NewRelay(&Store{}, &MemoryPublisher{}, RelayConfig{})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	if r.cfg.BatchSize != 100 {
+		t.Fatalf("BatchSize = %d, want 100", r.cfg.BatchSize)
+	}
+	if r.cfg.LeaseTTL != 180*time.Second {
+		t.Fatalf("LeaseTTL = %v, want 180s", r.cfg.LeaseTTL)
+	}
+	if r.cfg.MaxAttempts != 5 {
+		t.Fatalf("MaxAttempts = %d, want 5", r.cfg.MaxAttempts)
+	}
+	if r.workerID == "" {
+		t.Fatal("workerID is empty")
+	}
+}
+
+func TestNewRelay_HonorsExplicitConfig(t *testing.T) {
+	r, err := NewRelay(&Store{}, &MemoryPublisher{}, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     30 * time.Second,
+		MaxAttempts:  2,
+		WorkerIDFunc: func() string { return "fixed-worker" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	if r.cfg.BatchSize != 10 {
+		t.Fatalf("BatchSize = %d, want 10", r.cfg.BatchSize)
+	}
+	if r.workerID != "fixed-worker" {
+		t.Fatalf("workerID = %q, want fixed-worker", r.workerID)
+	}
+}
+
+func TestNewRelay_RejectsNilPublisher(t *testing.T) {
+	_, err := NewRelay(&Store{}, nil, RelayConfig{})
 	if err == nil {
 		t.Fatal("expected error for nil publisher")
+	}
+}
+
+func TestNewRelay_RejectsNilStore(t *testing.T) {
+	_, err := NewRelay(nil, &MemoryPublisher{}, RelayConfig{})
+	if err == nil {
+		t.Fatal("expected error for nil store")
 	}
 }
 
@@ -34,6 +84,218 @@ func TestMemoryPublisher_PublishStoresPayload(t *testing.T) {
 	}
 	if len(p.Events) != 1 || p.Events[0].MemoryID != payload.MemoryID {
 		t.Fatalf("events = %+v", p.Events)
+	}
+}
+
+func TestClaimBatch_SetsLeaseColumnsAndIncrementsAttempt(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_claim_lease", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+		TenantID:       "tenant_a",
+		IdempotencyKey: "idem_claim_lease",
+		RequestHash:    "hash_claim_lease",
+		Record: corememory.MemoryRecord{
+			UserID:                "user_a",
+			Kind:                  "episodic",
+			Source:                "user_saved",
+			Category:              "project",
+			Content:               "claim lease",
+			NormalizedContentHash: "hash-claim-lease",
+			Tags:                  []string{"relay"},
+			Importance:            0.9,
+		},
+	}); err != nil {
+		t.Fatalf("WriteRecord: %v", err)
+	}
+
+	relay, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     60 * time.Second,
+		MaxAttempts:  3,
+		WorkerIDFunc: func() string { return "worker-claim-1" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+
+	claimed, err := relay.ClaimBatch(ctx)
+	if err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %d, want 1", len(claimed))
+	}
+	if claimed[0].AttemptCount != 1 {
+		t.Fatalf("AttemptCount = %d, want 1", claimed[0].AttemptCount)
+	}
+
+	// verify lease columns populated
+	var claimedBy string
+	var claimedAt, leaseExpiresAt *time.Time
+	var status string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, claimed_by, claimed_at, lease_expires_at FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		claimed[0].OutboxID,
+	).Scan(&status, &claimedBy, &claimedAt, &leaseExpiresAt); err != nil {
+		t.Fatalf("read lease columns: %v", err)
+	}
+	if status != outboxStatusProcessing {
+		t.Fatalf("status = %s, want %s", status, outboxStatusProcessing)
+	}
+	if claimedBy != "worker-claim-1" {
+		t.Fatalf("claimed_by = %q, want worker-claim-1", claimedBy)
+	}
+	if claimedAt == nil {
+		t.Fatal("claimed_at is nil")
+	}
+	if leaseExpiresAt == nil {
+		t.Fatal("lease_expires_at is nil")
+	}
+}
+
+func TestClaimBatch_ReclaimsExpiredLeases(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_claim_expired", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+		TenantID:       "tenant_a",
+		IdempotencyKey: "idem_claim_expired",
+		RequestHash:    "hash_claim_expired",
+		Record: corememory.MemoryRecord{
+			UserID:                "user_a",
+			Kind:                  "episodic",
+			Source:                "user_saved",
+			Category:              "project",
+			Content:               "claim expired",
+			NormalizedContentHash: "hash-claim-expired",
+			Tags:                  []string{"relay"},
+			Importance:            0.9,
+		},
+	}); err != nil {
+		t.Fatalf("WriteRecord: %v", err)
+	}
+
+	// First worker claims; we then manually expire its lease to simulate a
+	// crashed pod.
+	worker1 := func() string { return "worker-expired-1" }
+	r1, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize: 10, LeaseTTL: 60 * time.Second, MaxAttempts: 3, WorkerIDFunc: worker1,
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	claimed, err := r1.ClaimBatch(ctx)
+	if err != nil {
+		t.Fatalf("ClaimBatch worker1: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("worker1 claimed %d, want 1", len(claimed))
+	}
+
+	// Expire the lease.
+	if _, err := pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE outbox_id = $1`, s.outboxTable()),
+		claimed[0].OutboxID,
+	); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+
+	// Second worker should pick it up.
+	worker2 := func() string { return "worker-expired-2" }
+	r2, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize: 10, LeaseTTL: 60 * time.Second, MaxAttempts: 3, WorkerIDFunc: worker2,
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	reclaimed, err := r2.ClaimBatch(ctx)
+	if err != nil {
+		t.Fatalf("ClaimBatch worker2: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("worker2 reclaimed %d, want 1", len(reclaimed))
+	}
+	if reclaimed[0].AttemptCount != 2 {
+		t.Fatalf("AttemptCount = %d, want 2 (worker1=1 + reclaim=1)", reclaimed[0].AttemptCount)
+	}
+
+	// Verify the row now owned by worker2.
+	var claimedBy string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT claimed_by FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		reclaimed[0].OutboxID,
+	).Scan(&claimedBy); err != nil {
+		t.Fatalf("read claimed_by: %v", err)
+	}
+	if claimedBy != "worker-expired-2" {
+		t.Fatalf("claimed_by = %q, want worker-expired-2", claimedBy)
+	}
+}
+
+func TestClaimBatch_RespectsBatchSize(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_claim_batch", time.Now().UnixNano())
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+			TenantID:       "tenant_a",
+			IdempotencyKey: fmt.Sprintf("idem_batch_%d", i),
+			RequestHash:    fmt.Sprintf("hash_batch_%d", i),
+			Record: corememory.MemoryRecord{
+				UserID:                "user_a",
+				Kind:                  "episodic",
+				Source:                "user_saved",
+				Category:              "project",
+				Content:               fmt.Sprintf("batch %d", i),
+				NormalizedContentHash: fmt.Sprintf("hash-batch-%d", i),
+				Tags:                  []string{"relay"},
+				Importance:            0.9,
+			},
+		}); err != nil {
+			t.Fatalf("WriteRecord %d: %v", i, err)
+		}
+	}
+
+	relay, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize:    2,
+		LeaseTTL:     60 * time.Second,
+		MaxAttempts:  3,
+		WorkerIDFunc: func() string { return "worker-batch" },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	claimed, err := relay.ClaimBatch(ctx)
+	if err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if len(claimed) != 2 {
+		t.Fatalf("claimed = %d, want 2 (BatchSize=2)", len(claimed))
 	}
 }
 
@@ -68,7 +330,7 @@ func TestRelay_RunOnceMarksSentOnSuccess(t *testing.T) {
 	}
 
 	publisher := &MemoryPublisher{}
-	relay, err := NewRelay(s, publisher, 10)
+	relay, err := NewRelay(s, publisher, RelayConfig{BatchSize: 10})
 	if err != nil {
 		t.Fatalf("NewRelay: %v", err)
 	}
@@ -116,7 +378,7 @@ func TestRelay_RunOnceMarksFailedOnPublisherError(t *testing.T) {
 	}
 
 	publisher := &MemoryPublisher{Fail: true}
-	relay, err := NewRelay(s, publisher, 10)
+	relay, err := NewRelay(s, publisher, RelayConfig{BatchSize: 10, MaxAttempts: 5})
 	if err != nil {
 		t.Fatalf("NewRelay: %v", err)
 	}
@@ -129,59 +391,6 @@ func TestRelay_RunOnceMarksFailedOnPublisherError(t *testing.T) {
 	}
 	assertOutboxStatus(t, ctx, pool, s.outboxTable(), outboxStatusPending, 1)
 	assertOutboxAttemptCount(t, ctx, pool, s.outboxTable(), 1)
-}
-
-func TestRelay_RunOnceClaimsRowsBeforePublish(t *testing.T) {
-	ctx := context.Background()
-	pool := openTestPool(t, ctx)
-
-	prefix := fmt.Sprintf("m5_%d_relay_claim", time.Now().UnixNano())
-	s, err := New(pool, Config{TablePrefix: prefix})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
-		TenantID:       "tenant_a",
-		IdempotencyKey: "idem_relay_claim",
-		RequestHash:    "hash_relay_claim",
-		Record: corememory.MemoryRecord{
-			UserID:                "user_a",
-			Kind:                  "episodic",
-			Source:                "user_saved",
-			Category:              "project",
-			Content:               "relay claim",
-			NormalizedContentHash: "relay-hash-claim",
-			Tags:                  []string{"relay"},
-			Importance:            0.9,
-		},
-	}); err != nil {
-		t.Fatalf("WriteRecord: %v", err)
-	}
-
-	relay, err := NewRelay(s, &MemoryPublisher{}, 10)
-	if err != nil {
-		t.Fatalf("NewRelay: %v", err)
-	}
-	tx, claimed, err := relay.claimPending(ctx)
-	if err != nil {
-		t.Fatalf("claimPending: %v", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	if len(claimed) != 1 {
-		t.Fatalf("claimed = %d, want 1", len(claimed))
-	}
-
-	secondTx, secondClaimed, err := relay.claimPending(ctx)
-	if err != nil {
-		t.Fatalf("second claimPending: %v", err)
-	}
-	defer secondTx.Rollback(ctx) //nolint:errcheck
-	if len(secondClaimed) != 0 {
-		t.Fatalf("second claimed = %d, want 0", len(secondClaimed))
-	}
 }
 
 func assertOutboxStatus(t *testing.T, ctx context.Context, pool dbQueryer, table, wantStatus string, wantCount int) {

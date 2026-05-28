@@ -7,127 +7,227 @@ import (
 
 	corememory "github.com/costa92/llm-agent-memory/memory"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// Publisher is implemented by anything able to forward an OutboxMessage to a
+// downstream system (vector index, message broker, etc.). Implementations MUST
+// be idempotent — the relay may publish the same message more than once on
+// lease loss / crash recovery, and the contract is at-least-once.
 type Publisher interface {
 	Publish(ctx context.Context, evt corememory.OutboxMessage) error
 }
 
-type outboxExecer interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-}
-
-type claimedOutboxMessage struct {
-	OutboxID string
-	Payload  corememory.OutboxMessage
-}
-
 var _ corememory.MessagePublisher = (Publisher)(nil)
 
+// RelayConfig tunes the outbox relay worker. Any zero-value field is replaced
+// with the package default at construction time; callers may pass an empty
+// RelayConfig{} to accept all defaults.
+type RelayConfig struct {
+	BatchSize    int
+	LeaseTTL     time.Duration
+	MaxAttempts  int
+	WorkerIDFunc func() string
+}
+
+func defaultRelayConfig() RelayConfig {
+	return RelayConfig{
+		BatchSize:    100,
+		LeaseTTL:     180 * time.Second,
+		MaxAttempts:  5,
+		WorkerIDFunc: NewRandomWorkerID,
+	}
+}
+
+// ClaimedMessage is the per-row payload returned by ClaimBatch. AttemptCount is
+// the value AFTER the claim's UPDATE has incremented it, so callers can compare
+// against MaxAttempts directly without re-reading the row.
+type ClaimedMessage struct {
+	OutboxID     string
+	Payload      corememory.OutboxMessage
+	AttemptCount int
+}
+
+// Relay drives the at-least-once delivery loop on top of the outbox table.
+// Each worker has a stable in-process identity (workerID) generated once at
+// construction; lease ownership is keyed by that identity.
 type Relay struct {
 	store     *Store
 	publisher Publisher
-	batchSize int
+	cfg       RelayConfig
+	workerID  string
 }
 
+// RunStats summarises the outcome of a RunOnce invocation. Published counts
+// rows that were both published AND acked successfully; Failed counts rows
+// whose publish errored but whose ack succeeded; LeaseLost counts rows whose
+// ack found the lease no longer owned by this worker (typically because the
+// lease TTL elapsed before publish completed).
 type RunStats struct {
 	Published int
 	Failed    int
+	LeaseLost int
 }
 
-func NewRelay(store *Store, publisher Publisher, batchSize int) (*Relay, error) {
+func NewRelay(store *Store, publisher Publisher, cfg RelayConfig) (*Relay, error) {
 	if store == nil {
 		return nil, fmt.Errorf("memory/postgres: relay store is required")
 	}
 	if publisher == nil {
 		return nil, fmt.Errorf("%w: publisher is required", ErrRelayPublishFailed)
 	}
-	if batchSize <= 0 {
-		batchSize = 100
+	def := defaultRelayConfig()
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = def.BatchSize
 	}
-	return &Relay{store: store, publisher: publisher, batchSize: batchSize}, nil
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = def.LeaseTTL
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = def.MaxAttempts
+	}
+	if cfg.WorkerIDFunc == nil {
+		cfg.WorkerIDFunc = def.WorkerIDFunc
+	}
+	return &Relay{
+		store:     store,
+		publisher: publisher,
+		cfg:       cfg,
+		workerID:  cfg.WorkerIDFunc(),
+	}, nil
 }
 
-func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
-	tx, claimed, err := r.claimPending(ctx)
+// ClaimBatch atomically claims up to BatchSize rows that are either pending or
+// have an expired lease, marking each as 'processing' with this worker's
+// identity, a fresh lease deadline, and an incremented attempt_count. Returns
+// the claimed rows with their AttemptCount set to the post-increment value.
+func (r *Relay) ClaimBatch(ctx context.Context) ([]ClaimedMessage, error) {
+	tx, err := r.store.pool.Begin(ctx)
 	if err != nil {
-		return RunStats{}, err
+		return nil, fmt.Errorf("memory/postgres: begin claim tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	rows, err := tx.Query(ctx,
+		fmt.Sprintf(`SELECT outbox_id, payload, attempt_count
+FROM %s
+WHERE status = $1
+   OR (status = $2 AND lease_expires_at < NOW())
+ORDER BY created_at
+FOR UPDATE SKIP LOCKED
+LIMIT $3`, r.store.outboxTable()),
+		outboxStatusPending, outboxStatusProcessing, r.cfg.BatchSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("memory/postgres: relay query claimable: %w", err)
+	}
+
+	type claimRow struct {
+		outboxID     string
+		payload      corememory.OutboxMessage
+		attemptCount int
+	}
+	var pending []claimRow
+	for rows.Next() {
+		var outboxID string
+		var raw []byte
+		var attemptCount int
+		if err := rows.Scan(&outboxID, &raw, &attemptCount); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("memory/postgres: relay scan claimable: %w", err)
+		}
+		var payload corememory.OutboxMessage
+		if err := decodeJSON(raw, &payload); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("memory/postgres: relay decode payload: %w", err)
+		}
+		pending = append(pending, claimRow{outboxID: outboxID, payload: payload, attemptCount: attemptCount})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("memory/postgres: relay rows: %w", err)
+	}
+	rows.Close()
+
+	if len(pending) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("memory/postgres: commit empty claim tx: %w", err)
+		}
+		return nil, nil
+	}
+
+	ids := make([]string, len(pending))
+	for i, p := range pending {
+		ids[i] = p.outboxID
+	}
+
+	if _, err := tx.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+SET status = $1,
+    claimed_by = $2,
+    claimed_at = NOW(),
+    lease_expires_at = NOW() + ($3 * INTERVAL '1 millisecond'),
+    attempt_count = attempt_count + 1
+WHERE outbox_id = ANY($4)`, r.store.outboxTable()),
+		outboxStatusProcessing, r.workerID, r.cfg.LeaseTTL.Milliseconds(), ids,
+	); err != nil {
+		return nil, fmt.Errorf("memory/postgres: relay claim update: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("memory/postgres: commit claim tx: %w", err)
+	}
+
+	out := make([]ClaimedMessage, len(pending))
+	for i, p := range pending {
+		out[i] = ClaimedMessage{
+			OutboxID:     p.outboxID,
+			Payload:      p.payload,
+			AttemptCount: p.attemptCount + 1, // post-increment view for callers
+		}
+	}
+	return out, nil
+}
+
+// RunOnce claims a batch, publishes each row, and marks it sent or failed.
+// This is the pre-M8a-prep behavior preserved through Task 7; Task 8 will
+// replace the inline mark calls with per-row Ack.
+func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
+	claimed, err := r.ClaimBatch(ctx)
+	if err != nil {
+		return RunStats{}, err
+	}
+
 	stats := RunStats{}
 	for _, msg := range claimed {
-		outboxID := msg.OutboxID
-		payload := msg.Payload
-		if err := r.publisher.Publish(ctx, payload); err != nil {
+		if err := r.publisher.Publish(ctx, msg.Payload); err != nil {
 			stats.Failed++
-			if markErr := r.markOutboxFailed(ctx, tx, outboxID, err); markErr != nil {
+			if markErr := r.markOutboxRetry(ctx, msg.OutboxID, err); markErr != nil {
 				return stats, markErr
 			}
 			continue
 		}
-		stats.Published++
-		if err := r.markOutboxSent(ctx, tx, outboxID); err != nil {
-			return stats, err
+		if markErr := r.markOutboxSent(ctx, msg.OutboxID); markErr != nil {
+			return stats, markErr
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return stats, fmt.Errorf("memory/postgres: commit relay tx: %w", err)
+		stats.Published++
 	}
 	return stats, nil
 }
 
-func (r *Relay) claimPending(ctx context.Context) (pgx.Tx, []claimedOutboxMessage, error) {
-	tx, err := r.store.pool.Begin(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("memory/postgres: begin relay claim tx: %w", err)
-	}
-
-	rows, err := tx.Query(ctx,
-		fmt.Sprintf(`SELECT outbox_id, payload
-FROM %s
-WHERE status = $1
-ORDER BY created_at
-FOR UPDATE SKIP LOCKED
-LIMIT $2`, r.store.outboxTable()),
-		outboxStatusPending, r.batchSize,
-	)
-	if err != nil {
-		tx.Rollback(ctx) //nolint:errcheck
-		return nil, nil, fmt.Errorf("memory/postgres: relay query pending: %w", err)
-	}
-	defer rows.Close()
-
-	claimed := make([]claimedOutboxMessage, 0, r.batchSize)
-	for rows.Next() {
-		var outboxID string
-		var raw []byte
-		if err := rows.Scan(&outboxID, &raw); err != nil {
-			tx.Rollback(ctx) //nolint:errcheck
-			return nil, nil, fmt.Errorf("memory/postgres: relay scan pending: %w", err)
-		}
-
-		var payload corememory.OutboxMessage
-		if err := decodeJSON(raw, &payload); err != nil {
-			tx.Rollback(ctx) //nolint:errcheck
-			return nil, nil, fmt.Errorf("memory/postgres: relay decode payload: %w", err)
-		}
-		claimed = append(claimed, claimedOutboxMessage{
-			OutboxID: outboxID,
-			Payload:  payload,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		tx.Rollback(ctx) //nolint:errcheck
-		return nil, nil, fmt.Errorf("memory/postgres: relay rows: %w", err)
-	}
-	return tx, claimed, nil
-}
-
-func (r *Relay) markOutboxSent(ctx context.Context, execer outboxExecer, outboxID string) error {
-	_, err := execer.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET status = $1, sent_at = $2 WHERE outbox_id = $3`, r.store.outboxTable()),
+// markOutboxSent / markOutboxRetry are interim helpers kept here for Task 7
+// only — Task 8 replaces both with a single Ack method that enforces the
+// ownership predicate. We intentionally keep these private and minimal so the
+// diff to delete them in Task 8 is small.
+func (r *Relay) markOutboxSent(ctx context.Context, outboxID string) error {
+	_, err := r.store.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+SET status = $1,
+    sent_at = $2,
+    claimed_by = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    last_error = NULL
+WHERE outbox_id = $3`, r.store.outboxTable()),
 		outboxStatusSent, time.Now().UTC(), outboxID,
 	)
 	if err != nil {
@@ -136,17 +236,24 @@ func (r *Relay) markOutboxSent(ctx context.Context, execer outboxExecer, outboxI
 	return nil
 }
 
-func (r *Relay) markOutboxFailed(ctx context.Context, execer outboxExecer, outboxID string, publishErr error) error {
-	_, err := execer.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET status = $1, attempt_count = attempt_count + 1, last_error = $2 WHERE outbox_id = $3`, r.store.outboxTable()),
+func (r *Relay) markOutboxRetry(ctx context.Context, outboxID string, publishErr error) error {
+	_, err := r.store.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+SET status = $1,
+    last_error = $2,
+    claimed_by = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL
+WHERE outbox_id = $3`, r.store.outboxTable()),
 		outboxStatusPending, publishErr.Error(), outboxID,
 	)
 	if err != nil {
-		return fmt.Errorf("memory/postgres: mark outbox failed: %w", err)
+		return fmt.Errorf("memory/postgres: mark outbox retry: %w", err)
 	}
 	return nil
 }
 
+// MemoryPublisher is the in-memory Publisher fake used by tests.
 type MemoryPublisher struct {
 	Events []corememory.OutboxMessage
 	Fail   bool

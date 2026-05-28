@@ -172,7 +172,7 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 						metrics.OutboxObserver(),
 					},
 				},
-			), cfg.OutboxBatchSize)
+			), pgmemory.RelayConfig{BatchSize: cfg.OutboxBatchSize})
 			if err != nil {
 				for i := len(cleanupFns) - 1; i >= 0; i-- {
 					cleanupFns[i]()
