@@ -432,7 +432,7 @@ The sub-spec is approved when:
 7. The cross-tenant fairness deferral (§4.10) is endorsed as v1.x-acceptable; future sub-spec owns it.
 8. Postgres 11+ minimum (§4.1) is endorsed.
 
-Once §8 is signed off, the implementation plan branches: `docs/superpowers/plans/<date>-m8a-prep-implementation.md`.
+Implementation plan: `docs/superpowers/plans/2026-05-28-m8a-prep-implementation.md` (14 TDD tasks, mirrors M7 plan discipline).
 
 ## 9. Review-Finding Disposition (v1 → v2)
 
