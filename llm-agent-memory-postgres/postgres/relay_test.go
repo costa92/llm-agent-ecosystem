@@ -2,11 +2,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	corememory "github.com/costa92/llm-agent-memory/memory"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestRelayConfig_Defaults(t *testing.T) {
@@ -391,6 +393,210 @@ func TestRelay_RunOnceMarksFailedOnPublisherError(t *testing.T) {
 	}
 	assertOutboxStatus(t, ctx, pool, s.outboxTable(), outboxStatusPending, 1)
 	assertOutboxAttemptCount(t, ctx, pool, s.outboxTable(), 1)
+}
+
+func TestAck_SuccessPathClearsLease(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_ack_success", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-ack-success", 5)
+
+	if err := relay.Ack(ctx, outboxID, true, 1, nil); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	var status string
+	var claimedBy *string
+	var leaseExpiresAt *time.Time
+	var sentAt *time.Time
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, claimed_by, lease_expires_at, sent_at FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &claimedBy, &leaseExpiresAt, &sentAt); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != outboxStatusSent {
+		t.Fatalf("status = %s, want sent", status)
+	}
+	if claimedBy != nil {
+		t.Fatalf("claimed_by = %v, want nil", *claimedBy)
+	}
+	if leaseExpiresAt != nil {
+		t.Fatalf("lease_expires_at = %v, want nil", *leaseExpiresAt)
+	}
+	if sentAt == nil {
+		t.Fatal("sent_at is nil")
+	}
+}
+
+func TestAck_RetryPathSetsPending(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_ack_retry", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-ack-retry", 5)
+
+	publishErr := fmt.Errorf("transient publish failure")
+	if err := relay.Ack(ctx, outboxID, false, 1, publishErr); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	var status string
+	var lastError *string
+	var claimedBy *string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, last_error, claimed_by FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &lastError, &claimedBy); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != outboxStatusPending {
+		t.Fatalf("status = %s, want pending", status)
+	}
+	if lastError == nil || *lastError != "transient publish failure" {
+		t.Fatalf("last_error = %v, want transient publish failure", lastError)
+	}
+	if claimedBy != nil {
+		t.Fatalf("claimed_by = %v, want nil", *claimedBy)
+	}
+}
+
+func TestAck_FailedPathWhenAttemptsExhausted(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_ack_failed", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-ack-failed", 3)
+
+	publishErr := fmt.Errorf("terminal failure")
+	if err := relay.Ack(ctx, outboxID, false, 3, publishErr); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	var status string
+	var lastError *string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, last_error FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &lastError); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != outboxStatusFailed {
+		t.Fatalf("status = %s, want failed", status)
+	}
+	if lastError == nil || *lastError != "terminal failure" {
+		t.Fatalf("last_error = %v, want terminal failure", lastError)
+	}
+}
+
+func TestAck_RejectsStolenLease(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_ack_stolen", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-ack-original", 5)
+
+	// Steal the lease — pretend another worker claimed it.
+	if _, err := pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s SET claimed_by = 'thief' WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	); err != nil {
+		t.Fatalf("steal lease: %v", err)
+	}
+
+	err := relay.Ack(ctx, outboxID, true, 1, nil)
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("Ack err = %v, want ErrLeaseLost", err)
+	}
+
+	// Original row state unchanged.
+	var status string
+	var claimedBy *string
+	if err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT status, claimed_by FROM %s WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	).Scan(&status, &claimedBy); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != outboxStatusProcessing {
+		t.Fatalf("status = %s, want processing (untouched)", status)
+	}
+	if claimedBy == nil || *claimedBy != "thief" {
+		t.Fatalf("claimed_by = %v, want thief (untouched)", claimedBy)
+	}
+}
+
+func TestAck_RejectsExpiredLease(t *testing.T) {
+	ctx := context.Background()
+	pool := openTestPool(t, ctx)
+
+	prefix := fmt.Sprintf("m8a_%d_ack_expired", time.Now().UnixNano())
+	s, relay, outboxID := setupRelayWithClaim(t, ctx, pool, prefix, "worker-ack-expired", 5)
+
+	// Expire the lease.
+	if _, err := pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE outbox_id = $1`, s.outboxTable()),
+		outboxID,
+	); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+
+	err := relay.Ack(ctx, outboxID, true, 1, nil)
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("Ack err = %v, want ErrLeaseLost", err)
+	}
+}
+
+// setupRelayWithClaim writes one record using the provided pool, claims it
+// with the named worker via a Relay configured for the given MaxAttempts,
+// and returns the store + relay + outbox_id. Tests use the same pool to
+// assert against row state after Ack.
+func setupRelayWithClaim(t *testing.T, ctx context.Context, pool *pgxpool.Pool, prefix, workerID string, maxAttempts int) (*Store, *Relay, string) {
+	t.Helper()
+
+	s, err := New(pool, Config{TablePrefix: prefix})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := s.WriteRecord(ctx, corememory.WriteRecordInput{
+		TenantID:       "tenant_a",
+		IdempotencyKey: fmt.Sprintf("idem_%s", prefix),
+		RequestHash:    fmt.Sprintf("hash_%s", prefix),
+		Record: corememory.MemoryRecord{
+			UserID:                "user_a",
+			Kind:                  "episodic",
+			Source:                "user_saved",
+			Category:              "project",
+			Content:               "ack test",
+			NormalizedContentHash: fmt.Sprintf("hash-%s", prefix),
+			Tags:                  []string{"relay"},
+			Importance:            0.9,
+		},
+	}); err != nil {
+		t.Fatalf("WriteRecord: %v", err)
+	}
+
+	relay, err := NewRelay(s, &MemoryPublisher{}, RelayConfig{
+		BatchSize:    10,
+		LeaseTTL:     60 * time.Second,
+		MaxAttempts:  maxAttempts,
+		WorkerIDFunc: func() string { return workerID },
+	})
+	if err != nil {
+		t.Fatalf("NewRelay: %v", err)
+	}
+	claimed, err := relay.ClaimBatch(ctx)
+	if err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %d, want 1", len(claimed))
+	}
+	return s, relay, claimed[0].OutboxID
 }
 
 func assertOutboxStatus(t *testing.T, ctx context.Context, pool dbQueryer, table, wantStatus string, wantCount int) {

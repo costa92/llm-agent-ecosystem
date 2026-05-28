@@ -9,4 +9,5 @@ var (
 	ErrSchemaVersionAhead  = errors.New("memory/postgres: schema version ahead of code")
 	ErrRelayPublishFailed  = errors.New("memory/postgres: relay publish failed")
 	ErrInvalidEventType    = errors.New("memory/postgres: invalid event type")
+	ErrLeaseLost           = errors.New("memory/postgres: outbox lease lost")
 )

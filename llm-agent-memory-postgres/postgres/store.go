@@ -24,6 +24,7 @@ const (
 	outboxStatusPending            = "pending"
 	outboxStatusProcessing         = "processing"
 	outboxStatusSent               = "sent"
+	outboxStatusFailed             = "failed"
 )
 
 // allowedEventTypes is the write-side allowlist of event-type strings the

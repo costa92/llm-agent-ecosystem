@@ -188,9 +188,9 @@ WHERE outbox_id = ANY($4)`, r.store.outboxTable()),
 	return out, nil
 }
 
-// RunOnce claims a batch, publishes each row, and marks it sent or failed.
-// This is the pre-M8a-prep behavior preserved through Task 7; Task 8 will
-// replace the inline mark calls with per-row Ack.
+// RunOnce claims a batch, publishes each row, and acks the outcome. Task 9
+// rewrites this to continue on ack failure and aggregate errors; for now we
+// keep the simple sequential loop and surface the first ack error.
 func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
 	claimed, err := r.ClaimBatch(ctx)
 	if err != nil {
@@ -199,56 +199,103 @@ func (r *Relay) RunOnce(ctx context.Context) (RunStats, error) {
 
 	stats := RunStats{}
 	for _, msg := range claimed {
-		if err := r.publisher.Publish(ctx, msg.Payload); err != nil {
-			stats.Failed++
-			if markErr := r.markOutboxRetry(ctx, msg.OutboxID, err); markErr != nil {
-				return stats, markErr
-			}
-			continue
+		publishErr := r.publisher.Publish(ctx, msg.Payload)
+		ackErr := r.Ack(ctx, msg.OutboxID, publishErr == nil, msg.AttemptCount, publishErr)
+		if ackErr != nil {
+			return stats, ackErr
 		}
-		if markErr := r.markOutboxSent(ctx, msg.OutboxID); markErr != nil {
-			return stats, markErr
+		if publishErr != nil {
+			stats.Failed++
+			continue
 		}
 		stats.Published++
 	}
 	return stats, nil
 }
 
-// markOutboxSent / markOutboxRetry are interim helpers kept here for Task 7
-// only — Task 8 replaces both with a single Ack method that enforces the
-// ownership predicate. We intentionally keep these private and minimal so the
-// diff to delete them in Task 8 is small.
-func (r *Relay) markOutboxSent(ctx context.Context, outboxID string) error {
-	_, err := r.store.pool.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s
-SET status = $1,
-    sent_at = $2,
+// Ack records the publish outcome for a claimed outbox row. The three UPDATEs
+// share an ownership predicate so a worker whose lease expired (or was stolen)
+// cannot mutate the row out from under whoever owns it now.
+//
+//   - ok=true  → status='sent', sent_at set, lease columns cleared, last_error cleared.
+//   - ok=false AND attemptCount < MaxAttempts → status='pending', last_error set,
+//     lease cleared so the next ClaimBatch can pick it up.
+//   - ok=false AND attemptCount >= MaxAttempts → status='failed', last_error set,
+//     lease cleared so operators can RequeueFailed it later.
+//
+// On any branch, zero rows-affected means the ownership predicate failed
+// (lease expired or claimed_by mismatch) and we return ErrLeaseLost without
+// touching the row. attempt_count is NOT incremented here — ClaimBatch did
+// that at claim time.
+//
+// The ownership predicate is:
+//
+//	WHERE outbox_id=$1 AND claimed_by=$2 AND lease_expires_at > NOW()
+func (r *Relay) Ack(ctx context.Context, outboxID string, ok bool, attemptCount int, publishErr error) error {
+	table := r.store.outboxTable()
+	const ownership = `WHERE outbox_id = $1 AND claimed_by = $2 AND lease_expires_at > NOW()`
+
+	if ok {
+		tag, err := r.store.pool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s
+SET status = $3,
+    sent_at = $4,
     claimed_by = NULL,
     claimed_at = NULL,
     lease_expires_at = NULL,
     last_error = NULL
-WHERE outbox_id = $3`, r.store.outboxTable()),
-		outboxStatusSent, time.Now().UTC(), outboxID,
-	)
-	if err != nil {
-		return fmt.Errorf("memory/postgres: mark outbox sent: %w", err)
+%s`, table, ownership),
+			outboxID, r.workerID, outboxStatusSent, time.Now().UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("memory/postgres: ack success: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrLeaseLost
+		}
+		return nil
 	}
-	return nil
-}
 
-func (r *Relay) markOutboxRetry(ctx context.Context, outboxID string, publishErr error) error {
-	_, err := r.store.pool.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s
-SET status = $1,
-    last_error = $2,
+	errMsg := ""
+	if publishErr != nil {
+		errMsg = publishErr.Error()
+	}
+
+	if attemptCount >= r.cfg.MaxAttempts {
+		tag, err := r.store.pool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s
+SET status = $3,
+    last_error = $4,
     claimed_by = NULL,
     claimed_at = NULL,
     lease_expires_at = NULL
-WHERE outbox_id = $3`, r.store.outboxTable()),
-		outboxStatusPending, publishErr.Error(), outboxID,
+%s`, table, ownership),
+			outboxID, r.workerID, outboxStatusFailed, errMsg,
+		)
+		if err != nil {
+			return fmt.Errorf("memory/postgres: ack failed-final: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrLeaseLost
+		}
+		return nil
+	}
+
+	tag, err := r.store.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+SET status = $3,
+    last_error = $4,
+    claimed_by = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL
+%s`, table, ownership),
+		outboxID, r.workerID, outboxStatusPending, errMsg,
 	)
 	if err != nil {
-		return fmt.Errorf("memory/postgres: mark outbox retry: %w", err)
+		return fmt.Errorf("memory/postgres: ack retry: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLeaseLost
 	}
 	return nil
 }
