@@ -5,19 +5,92 @@ import (
 	"fmt"
 )
 
-const SchemaVersion = 1
+// HeadSchemaVersion is the latest schema version this code knows how to migrate to.
+// Bumped to 2 in M8a-prep for the relay-lease columns (group v2).
+const HeadSchemaVersion = 2
+
+// SchemaVersion is retained as an alias for backwards compatibility with
+// existing M5-M7 callers/tests. It now points at HeadSchemaVersion.
+const SchemaVersion = HeadSchemaVersion
+
+// migrationGroup is a single, atomically-applied bundle of DDL statements
+// recorded under a specific schema version row.
+type migrationGroup struct {
+	Version       int
+	Transactional bool
+	Statements    []string
+}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	current, err := s.currentSchemaVersion(ctx)
 	if err != nil {
 		return err
 	}
-	if current > SchemaVersion {
-		return fmt.Errorf("%w: db=%d code=%d", ErrSchemaVersionAhead, current, SchemaVersion)
+	if current > HeadSchemaVersion {
+		return fmt.Errorf("%w: db=%d code=%d", ErrSchemaVersionAhead, current, HeadSchemaVersion)
 	}
-	for _, stmt := range s.migrationStatements() {
+	for _, group := range s.migrationGroups() {
+		if group.Version <= current {
+			continue
+		}
+		if group.Transactional {
+			if err := s.runGroupInTx(ctx, group); err != nil {
+				return err
+			}
+		} else {
+			if err := s.runGroupDirect(ctx, group); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrationGroups() []migrationGroup {
+	return []migrationGroup{
+		{Version: 1, Transactional: true, Statements: s.v1Statements()},
+		{Version: 2, Transactional: true, Statements: s.v2RelayLeaseStatements()},
+	}
+}
+
+// runGroupInTx executes a transactional migration group atomically: all
+// statements + the version-row insert happen inside one pgx transaction,
+// so any error rolls back the entire group.
+func (s *Store) runGroupInTx(ctx context.Context, group migrationGroup) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("memory/postgres: migrate begin tx (v%d): %w", group.Version, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	for _, stmt := range group.Statements {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("memory/postgres: migrate v%d: %w", group.Version, err)
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		fmt.Sprintf(
+			`INSERT INTO %s (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`,
+			s.schemaVersionTable(),
+		),
+		group.Version,
+	); err != nil {
+		return fmt.Errorf("memory/postgres: migrate v%d record version: %w", group.Version, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("memory/postgres: migrate v%d commit: %w", group.Version, err)
+	}
+	return nil
+}
+
+// runGroupDirect executes a non-transactional migration group by running each
+// statement directly against the pool, then recording the version row as a
+// final separate statement. Used for DDL that Postgres refuses to run inside
+// a transaction (e.g., CREATE INDEX CONCURRENTLY).
+func (s *Store) runGroupDirect(ctx context.Context, group migrationGroup) error {
+	for _, stmt := range group.Statements {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("memory/postgres: migrate: %w", err)
+			return fmt.Errorf("memory/postgres: migrate v%d (direct): %w", group.Version, err)
 		}
 	}
 	if _, err := s.pool.Exec(ctx,
@@ -25,9 +98,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			`INSERT INTO %s (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`,
 			s.schemaVersionTable(),
 		),
-		SchemaVersion,
+		group.Version,
 	); err != nil {
-		return fmt.Errorf("memory/postgres: migrate record version: %w", err)
+		return fmt.Errorf("memory/postgres: migrate v%d (direct) record version: %w", group.Version, err)
 	}
 	return nil
 }
@@ -60,7 +133,10 @@ func (s *Store) currentSchemaVersion(ctx context.Context) (int, error) {
 	return version, nil
 }
 
-func (s *Store) migrationStatements() []string {
+// v1Statements returns the flat list of DDL statements that originally
+// constituted SchemaVersion=1 (M5-M7). The schema_version table is created
+// here so subsequent group recording can target it.
+func (s *Store) v1Statements() []string {
 	return []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			version BIGINT PRIMARY KEY,
@@ -170,4 +246,12 @@ func (s *Store) migrationStatements() []string {
 		fmt.Sprintf(`COMMENT ON COLUMN %s.reason IS 'free-form in v1.x (M7); enum frozen in v2 (M8)'`,
 			s.memoryDecisionTraceTable()),
 	}
+}
+
+// v2RelayLeaseStatements is the schema group v2 — relay lease columns on the
+// outbox table plus a partial index for the claim-expired-lease query.
+// Task 3 fills this; for Task 1 it is intentionally empty so Migrate() records
+// v2 but applies no DDL.
+func (s *Store) v2RelayLeaseStatements() []string {
+	return nil
 }
