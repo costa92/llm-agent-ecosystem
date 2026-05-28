@@ -389,6 +389,95 @@ func (s *Store) SaveIdempotency(ctx context.Context, entry corememory.Idempotenc
 	return nil
 }
 
+// RequeueResult summarises the outcome of a RequeueFailed call. A
+// RowsAffected of zero is the documented no-op signal — the row either
+// never existed or is not currently in the 'failed' state, so operators
+// can distinguish "I requeued one row" from "that ID was a typo or
+// already-pending" without an extra read.
+type RequeueResult struct {
+	RowsAffected int64
+}
+
+// FailedOutboxRow is the operator view of a single 'failed' outbox row.
+// Field semantics match the corresponding column on the outbox table; we
+// expose the AggregateID rather than the EventID because operators
+// typically need the memory_id to correlate with application logs.
+type FailedOutboxRow struct {
+	OutboxID     string
+	AggregateID  string
+	EventType    string
+	AttemptCount int
+	LastError    string
+	CreatedAt    time.Time
+}
+
+// RequeueFailed flips a single 'failed' outbox row back to 'pending' and
+// resets attempt_count to 0 so the relay treats it as a fresh delivery
+// attempt. last_error is cleared and lease columns are nulled defensively
+// (they should already be NULL on a failed row, but we don't trust the
+// world).
+//
+// Returns RowsAffected = 1 on success, 0 if the row is not in the 'failed'
+// state (or doesn't exist). The 0-case is intentionally not an error —
+// operator tooling typically wants to distinguish "found nothing to do"
+// from "request was malformed".
+//
+// No audit row is written by this method; operators who need provenance
+// can query memory_event history alongside the outbox row.
+func (s *Store) RequeueFailed(ctx context.Context, outboxID string) (RequeueResult, error) {
+	tag, err := s.pool.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s
+			SET status = $1,
+			    attempt_count = 0,
+			    last_error = NULL,
+			    claimed_by = NULL,
+			    claimed_at = NULL,
+			    lease_expires_at = NULL
+			WHERE outbox_id = $2 AND status = $3`, s.outboxTable()),
+		outboxStatusPending, outboxID, outboxStatusFailed,
+	)
+	if err != nil {
+		return RequeueResult{}, fmt.Errorf("memory/postgres: requeue failed: %w", err)
+	}
+	return RequeueResult{RowsAffected: tag.RowsAffected()}, nil
+}
+
+// ListFailed returns up to limit 'failed' outbox rows, newest first. The
+// ordering is by created_at DESC so a paginated operator tool surfaces
+// recently-failed work first. last_error and attempt_count are populated
+// from the columns directly; null last_error becomes "".
+func (s *Store) ListFailed(ctx context.Context, limit int) ([]FailedOutboxRow, error) {
+	rows, err := s.pool.Query(ctx,
+		fmt.Sprintf(`SELECT outbox_id, aggregate_id, event_type, attempt_count, last_error, created_at
+FROM %s
+WHERE status = $1
+ORDER BY created_at DESC
+LIMIT $2`, s.outboxTable()),
+		outboxStatusFailed, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("memory/postgres: list failed outbox: %w", err)
+	}
+	defer rows.Close()
+
+	var out []FailedOutboxRow
+	for rows.Next() {
+		var row FailedOutboxRow
+		var lastError *string
+		if err := rows.Scan(&row.OutboxID, &row.AggregateID, &row.EventType, &row.AttemptCount, &lastError, &row.CreatedAt); err != nil {
+			return nil, fmt.Errorf("memory/postgres: list failed scan: %w", err)
+		}
+		if lastError != nil {
+			row.LastError = *lastError
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory/postgres: list failed rows: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) EnqueueOutbox(ctx context.Context, msg corememory.OutboxMessage) error {
 	if err := validateEventType(msg.EventType); err != nil {
 		return err
