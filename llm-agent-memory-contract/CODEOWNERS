@@ -1,0 +1,4 @@
+# The durable contract is the highest-stability, DB-backed API.
+# Any change requires explicit owner review.
+*           @costa92
+/contract/  @costa92
