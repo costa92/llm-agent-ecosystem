@@ -546,6 +546,20 @@ func (s *Store) mutateRecord(ctx context.Context, in mutationInput) (corememory.
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	rec, err := s.mutateRecordTx(ctx, tx, in)
+	if err != nil {
+		return corememory.MemoryRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return corememory.MemoryRecord{}, fmt.Errorf("memory/postgres: commit mutation tx: %w", err)
+	}
+	return rec, nil
+}
+
+// mutateRecordTx is the tx-aware core of mutateRecord. It performs the
+// load-for-update, version check, UPDATE, event INSERT, and outbox INSERT
+// inside the provided tx. The caller owns Begin/Commit/Rollback.
+func (s *Store) mutateRecordTx(ctx context.Context, tx pgx.Tx, in mutationInput) (corememory.MemoryRecord, error) {
 	current, err := s.loadRecordForUpdate(ctx, tx, in.tenantID, in.memoryID)
 	if err != nil {
 		return corememory.MemoryRecord{}, err
@@ -624,9 +638,6 @@ func (s *Store) mutateRecord(ctx context.Context, in mutationInput) (corememory.
 		return corememory.MemoryRecord{}, fmt.Errorf("memory/postgres: insert mutation outbox: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return corememory.MemoryRecord{}, fmt.Errorf("memory/postgres: commit mutation tx: %w", err)
-	}
 	return current, nil
 }
 

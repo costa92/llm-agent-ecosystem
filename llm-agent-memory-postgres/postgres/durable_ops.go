@@ -58,7 +58,9 @@ func (s *Store) Promote(ctx context.Context, in corememory.PromoteRecordInput) (
 	}
 
 	// Synthetic request hash for the promote idempotency entry.
-	syntheticHash := "promote:" + in.MemoryID
+	// Keyed on MemoryID + SourceEventID + ExpectedVersion so that a reused
+	// IdempotencyKey with a different request is rejected as a conflict.
+	syntheticHash := fmt.Sprintf("promote:%s:%s:%d", in.MemoryID, in.SourceEventID, in.ExpectedVersion)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -221,8 +223,8 @@ func (s *Store) Promote(ctx context.Context, in corememory.PromoteRecordInput) (
 
 // ResolveDedupe checks whether a winner already exists for the given
 // (tenant, dedupe_key) pair. If none exists, the candidate becomes the winner.
-// If a winner already exists, the candidate (loser) is collapsed via DeleteRecord
-// and a memory_dedupe_collapsed event + outbox row are emitted on the winner.
+// If a winner already exists, the entire collision path (loser soft-delete +
+// memory_dedupe_collapsed event + outbox) is executed atomically in one tx.
 func (s *Store) ResolveDedupe(ctx context.Context, in corememory.ResolveDedupeInput) (corememory.ResolveDedupeResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -259,27 +261,30 @@ func (s *Store) ResolveDedupe(ctx context.Context, in corememory.ResolveDedupeIn
 		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: query dedupe index: %w", selectErr)
 	}
 
-	// Collision: load winner to determine Pinned status.
+	// Collision: everything below runs in the same tx for atomicity.
+
+	// (a) Soft-delete the loser within this tx; emits memory_deleted event + outbox.
+	if _, err := s.mutateRecordTx(ctx, tx, mutationInput{
+		tenantID:        in.TenantID,
+		memoryID:        in.Candidate.MemoryID,
+		expectedVersion: in.Candidate.Version,
+		eventType:       eventTypeMemoryDeleted,
+		apply: func(r *corememory.MemoryRecord, now time.Time) {
+			r.Deleted = true
+			r.DeletedAt = &now
+			r.UpdatedAt = now
+		},
+	}); err != nil {
+		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: dedupe delete loser: %w", err)
+	}
+
+	// (b) Load the winner for its Pinned flag.
 	winner, err := s.loadRecordForUpdate(ctx, tx, in.TenantID, winnerID)
 	if err != nil {
 		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: load dedupe winner: %w", err)
 	}
 
-	// Commit the dedupe-index tx before collapsing; DeleteRecord opens its own tx.
-	if err := tx.Commit(ctx); err != nil {
-		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: commit dedupe collision tx: %w", err)
-	}
-
-	// Collapse the loser by deleting it (emits memory_deleted event + outbox).
-	if _, err := s.DeleteRecord(ctx, corememory.DeleteRecordInput{
-		TenantID:        in.TenantID,
-		MemoryID:        in.Candidate.MemoryID,
-		ExpectedVersion: in.Candidate.Version,
-	}); err != nil {
-		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: dedupe delete loser: %w", err)
-	}
-
-	// Emit memory_dedupe_collapsed event + outbox row, attributed to the winner.
+	// (c) Emit memory_dedupe_collapsed event + outbox, attributed to the winner.
 	collapseMeta := map[string]any{
 		corememory.DedupeCollapsedLoserIDMetadataKey: in.Candidate.MemoryID,
 	}
@@ -296,7 +301,7 @@ func (s *Store) ResolveDedupe(ctx context.Context, in corememory.ResolveDedupeIn
 	if err != nil {
 		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: encode dedupe collapse event: %w", err)
 	}
-	if _, err := s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (event_id, memory_id, tenant_id, event_type, version, payload)
 			VALUES ($1, $2, $3, $4, $5, $6)`, s.memoryEventTable()),
 		collapseEventID, winner.MemoryID, winner.TenantID, eventTypeMemoryDedupeCollapsed, winner.Version, collapseEventRaw,
@@ -317,7 +322,7 @@ func (s *Store) ResolveDedupe(ctx context.Context, in corememory.ResolveDedupeIn
 	if err != nil {
 		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: encode dedupe collapse outbox: %w", err)
 	}
-	if _, err := s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (
 			outbox_id, aggregate_type, aggregate_id, tenant_id, event_id, event_type, payload, status
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, s.outboxTable()),
@@ -326,6 +331,12 @@ func (s *Store) ResolveDedupe(ctx context.Context, in corememory.ResolveDedupeIn
 		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: insert dedupe collapse outbox: %w", err)
 	}
 
+	// (d) Commit all collision writes atomically.
+	if err := tx.Commit(ctx); err != nil {
+		return corememory.ResolveDedupeResult{}, fmt.Errorf("memory/postgres: commit dedupe collision tx: %w", err)
+	}
+
+	// (e) Determine action from winner's Pinned flag.
 	action := corememory.DedupeMergedExisting
 	if winner.Pinned {
 		action = corememory.DedupeCollapsedByPin
