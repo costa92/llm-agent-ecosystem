@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/jackc/pgx/v5"
 )
 

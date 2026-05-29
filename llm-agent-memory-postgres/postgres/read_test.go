@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 )
 
 func TestGetRecord_ReturnsVisibleRecord(t *testing.T) {

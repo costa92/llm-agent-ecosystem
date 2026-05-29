@@ -3,7 +3,7 @@ package postgres
 import (
 	"context"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 )
 
 // LeaseAwarePublisher is a test fake that lets tests inject arbitrary

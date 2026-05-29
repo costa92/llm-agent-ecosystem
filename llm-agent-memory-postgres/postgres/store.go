@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -106,7 +106,7 @@ func (s *Store) WriteRecord(ctx context.Context, in corememory.WriteRecordInput)
 		)`, s.memoryRecordTable()),
 		record.MemoryID, record.TenantID, record.UserID, nullableString(record.ProjectID), nullableString(record.SessionID),
 		record.Kind, record.Source, record.Category, record.Content, record.NormalizedContentHash,
-		record.Tags, record.Importance, record.Pinned, record.Disabled, record.Deleted, record.Version,
+		nonNilTags(record.Tags), record.Importance, record.Pinned, record.Disabled, record.Deleted, record.Version,
 		record.CreatedAt, record.UpdatedAt, record.DeletedAt, record.LastAccessAt, record.HitCount,
 		nullableString(record.ConsolidatedFromEventID),
 	); err != nil {
@@ -506,6 +506,25 @@ func nullableString(v string) any {
 	return v
 }
 
+// derefString returns the pointed-to string, or "" when the pointer is nil.
+// It is the read-side counterpart of nullableString: nullable TEXT columns are
+// scanned into *string and collapsed back to the zero value here.
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+// nonNilTags ensures a nil slice is written as an empty JSON array rather than
+// SQL NULL, satisfying the tags JSONB NOT NULL column.
+func nonNilTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	return tags
+}
+
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }
@@ -613,6 +632,7 @@ func (s *Store) mutateRecord(ctx context.Context, in mutationInput) (corememory.
 
 func (s *Store) loadRecordForUpdate(ctx context.Context, q queryRower, tenantID, memoryID string) (corememory.MemoryRecord, error) {
 	var record corememory.MemoryRecord
+	var projectID, sessionID, consolidatedFromEventID *string
 	err := q.QueryRow(ctx,
 		fmt.Sprintf(`SELECT
 			memory_id, tenant_id, user_id, project_id, session_id, kind, source, category, content,
@@ -622,11 +642,11 @@ func (s *Store) loadRecordForUpdate(ctx context.Context, q queryRower, tenantID,
 		WHERE tenant_id = $1 AND memory_id = $2`, s.memoryRecordTable()),
 		tenantID, memoryID,
 	).Scan(
-		&record.MemoryID, &record.TenantID, &record.UserID, &record.ProjectID, &record.SessionID,
+		&record.MemoryID, &record.TenantID, &record.UserID, &projectID, &sessionID,
 		&record.Kind, &record.Source, &record.Category, &record.Content, &record.NormalizedContentHash,
 		&record.Tags, &record.Importance, &record.Pinned, &record.Disabled, &record.Deleted, &record.Version,
 		&record.CreatedAt, &record.UpdatedAt, &record.DeletedAt, &record.LastAccessAt, &record.HitCount,
-		&record.ConsolidatedFromEventID,
+		&consolidatedFromEventID,
 	)
 	if err != nil {
 		if isNoRows(err) {
@@ -634,5 +654,8 @@ func (s *Store) loadRecordForUpdate(ctx context.Context, q queryRower, tenantID,
 		}
 		return corememory.MemoryRecord{}, fmt.Errorf("memory/postgres: load record: %w", err)
 	}
+	record.ProjectID = derefString(projectID)
+	record.SessionID = derefString(sessionID)
+	record.ConsolidatedFromEventID = derefString(consolidatedFromEventID)
 	return record, nil
 }

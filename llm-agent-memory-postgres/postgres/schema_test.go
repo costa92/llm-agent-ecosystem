@@ -158,20 +158,23 @@ func TestMigrationGroup_TypeExists(t *testing.T) {
 	}
 }
 
-func TestMigrationGroups_HeadVersionIsTwo(t *testing.T) {
-	if HeadSchemaVersion != 2 {
-		t.Fatalf("HeadSchemaVersion = %d, want 2", HeadSchemaVersion)
+func TestMigrationGroups_HeadVersionIsThree(t *testing.T) {
+	if HeadSchemaVersion != 3 {
+		t.Fatalf("HeadSchemaVersion = %d, want 3", HeadSchemaVersion)
 	}
 	s := &Store{}
 	groups := s.migrationGroups()
-	if len(groups) < 2 {
-		t.Fatalf("migrationGroups() returned %d groups, want >= 2", len(groups))
+	if len(groups) < 3 {
+		t.Fatalf("migrationGroups() returned %d groups, want >= 3", len(groups))
 	}
 	if groups[0].Version != 1 {
 		t.Fatalf("groups[0].Version = %d, want 1", groups[0].Version)
 	}
 	if groups[1].Version != 2 {
 		t.Fatalf("groups[1].Version = %d, want 2", groups[1].Version)
+	}
+	if groups[2].Version != 3 {
+		t.Fatalf("groups[2].Version = %d, want 3", groups[2].Version)
 	}
 	for i, g := range groups {
 		if !g.Transactional {

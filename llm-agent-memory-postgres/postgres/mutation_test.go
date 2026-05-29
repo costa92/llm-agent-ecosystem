@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -292,6 +292,51 @@ func latestOutboxPayload(t *testing.T, ctx context.Context, pool dbQueryer, tabl
 	var msg corememory.OutboxMessage
 	if err := decodeJSON(raw, &msg); err != nil {
 		t.Fatalf("decode latest outbox payload: %v", err)
+	}
+	return msg
+}
+
+func latestEventPayload(t *testing.T, ctx context.Context, pool dbQueryer, table string) corememory.StoredEvent {
+	t.Helper()
+
+	var raw []byte
+	if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT payload FROM %s ORDER BY created_at DESC LIMIT 1`, table)).Scan(&raw); err != nil {
+		t.Fatalf("select latest event payload: %v", err)
+	}
+
+	var evt corememory.StoredEvent
+	if err := decodeJSON(raw, &evt); err != nil {
+		t.Fatalf("decode latest event payload: %v", err)
+	}
+	return evt
+}
+
+func latestEventPayloadByType(t *testing.T, ctx context.Context, pool dbQueryer, table, eventType string) corememory.StoredEvent {
+	t.Helper()
+
+	var raw []byte
+	if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT payload FROM %s WHERE event_type = $1 ORDER BY created_at DESC LIMIT 1`, table), eventType).Scan(&raw); err != nil {
+		t.Fatalf("select latest event payload by type %q: %v", eventType, err)
+	}
+
+	var evt corememory.StoredEvent
+	if err := decodeJSON(raw, &evt); err != nil {
+		t.Fatalf("decode latest event payload by type %q: %v", eventType, err)
+	}
+	return evt
+}
+
+func latestOutboxPayloadByType(t *testing.T, ctx context.Context, pool dbQueryer, table, eventType string) corememory.OutboxMessage {
+	t.Helper()
+
+	var raw []byte
+	if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT payload FROM %s WHERE event_type = $1 ORDER BY created_at DESC LIMIT 1`, table), eventType).Scan(&raw); err != nil {
+		t.Fatalf("select latest outbox payload by type %q: %v", eventType, err)
+	}
+
+	var msg corememory.OutboxMessage
+	if err := decodeJSON(raw, &msg); err != nil {
+		t.Fatalf("decode latest outbox payload by type %q: %v", eventType, err)
 	}
 	return msg
 }

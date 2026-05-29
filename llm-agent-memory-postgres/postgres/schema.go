@@ -6,8 +6,8 @@ import (
 )
 
 // HeadSchemaVersion is the latest schema version this code knows how to migrate to.
-// Bumped to 2 in M8a-prep for the relay-lease columns (group v2).
-const HeadSchemaVersion = 2
+// Bumped to 3 in M8a for working-kind support and the dedupe index table.
+const HeadSchemaVersion = 3
 
 // SchemaVersion is retained as an alias for backwards compatibility with
 // existing M5-M7 callers/tests. It now points at HeadSchemaVersion.
@@ -61,6 +61,7 @@ func (s *Store) migrationGroups() []migrationGroup {
 	return []migrationGroup{
 		{Version: 1, Transactional: true, Statements: s.v1Statements()},
 		{Version: 2, Transactional: true, Statements: s.v2RelayLeaseStatements()},
+		{Version: 3, Transactional: true, Statements: s.v3WorkingAndDedupeStatements()},
 	}
 }
 
@@ -272,5 +273,38 @@ func (s *Store) v2RelayLeaseStatements() []string {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s_lease_idx
 			ON %s (status, lease_expires_at)
 			WHERE status = 'processing'`, outbox, outbox),
+	}
+}
+
+// v3WorkingAndDedupeStatements is schema group v3 — adds 'working' to the kind
+// check constraint on memory_record and creates the dedupe-winner registry table.
+func (s *Store) v3WorkingAndDedupeStatements() []string {
+	record := s.memoryRecordTable()
+	dedupe := s.dedupeIndexTable()
+	return []string{
+		// Widen the kind CHECK to admit 'working'. The original constraint is
+		// unnamed, so Postgres auto-generated (and 63-byte-truncated) its name;
+		// a constructed "<table>_kind_check" literal will not match it. Discover
+		// the real name from the catalog and drop whatever kind CHECK exists,
+		// then re-add the widened constraint.
+		fmt.Sprintf(`DO $$
+DECLARE con text;
+BEGIN
+  FOR con IN
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = '%s'::regclass AND contype = 'c'
+      AND pg_get_constraintdef(oid) ILIKE '%%kind%%'
+  LOOP
+    EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %%I', con);
+  END LOOP;
+  ALTER TABLE %s ADD CHECK (kind IN ('working', 'episodic', 'semantic'));
+END $$;`, record, record, record),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			tenant_id TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL,
+			winner_memory_id TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (tenant_id, dedupe_key)
+		)`, dedupe),
 	}
 }
