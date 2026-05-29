@@ -4,6 +4,7 @@ use (
 	./llm-agent
 	./llm-agent-customer-support
 	./llm-agent-flow
+	./llm-agent-memory-contract
 	./llm-agent-memory
 	./llm-agent-memory-gateway
 	./llm-agent-memory-postgres
