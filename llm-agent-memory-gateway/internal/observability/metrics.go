@@ -117,8 +117,12 @@ func (m *Metrics) AddOutboxIgnored()      { m.outboxIgnored.Add(1) }
 
 // ---- M7 per-bucket counters ----
 
-func (m *Metrics) AddEmbeddingRequest(tenantBucket string) { m.addBucket(m.embeddingRequest, tenantBucket, 1) }
-func (m *Metrics) AddEmbeddingApplied(tenantBucket string) { m.addBucket(m.embeddingApplied, tenantBucket, 1) }
+func (m *Metrics) AddEmbeddingRequest(tenantBucket string) {
+	m.addBucket(m.embeddingRequest, tenantBucket, 1)
+}
+func (m *Metrics) AddEmbeddingApplied(tenantBucket string) {
+	m.addBucket(m.embeddingApplied, tenantBucket, 1)
+}
 func (m *Metrics) AddEmbeddingTokens(tenantBucket string, n uint64) {
 	m.addBucket(m.embeddingTokens, tenantBucket, n)
 }

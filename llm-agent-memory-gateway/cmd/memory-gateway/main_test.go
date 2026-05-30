@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/costa92/llm-agent-memory-gateway/internal/config"
 	"github.com/costa92/llm-agent-memory-gateway/internal/service"
 	pgmemory "github.com/costa92/llm-agent-memory-postgres/postgres"
-	corememory "github.com/costa92/llm-agent-memory/memory"
 	ragpg "github.com/costa92/llm-agent-rag/postgres"
 )
 

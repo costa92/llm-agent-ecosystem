@@ -10,12 +10,12 @@ import (
 	"sync"
 	"testing"
 
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/costa92/llm-agent-memory-gateway/internal/authz"
 	"github.com/costa92/llm-agent-memory-gateway/internal/httpapi"
 	"github.com/costa92/llm-agent-memory-gateway/internal/observability"
 	"github.com/costa92/llm-agent-memory-gateway/internal/service"
 	pgmemory "github.com/costa92/llm-agent-memory-postgres/postgres"
-	corememory "github.com/costa92/llm-agent-memory/memory"
 )
 
 type inMemoryGateway struct {

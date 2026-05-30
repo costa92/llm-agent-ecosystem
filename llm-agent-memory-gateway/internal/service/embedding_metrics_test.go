@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/costa92/llm-agent-memory-gateway/internal/authz"
-	corememory "github.com/costa92/llm-agent-memory/memory"
 	ragembed "github.com/costa92/llm-agent-rag/embed"
 	ragstore "github.com/costa92/llm-agent-rag/store"
 )

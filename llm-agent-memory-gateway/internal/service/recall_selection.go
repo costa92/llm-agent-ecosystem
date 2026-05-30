@@ -3,7 +3,7 @@ package service
 import (
 	"sort"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 )
 
 type recallCandidate struct {

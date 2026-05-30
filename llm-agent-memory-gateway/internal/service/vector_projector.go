@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/costa92/llm-agent-memory-gateway/internal/authz"
-	corememory "github.com/costa92/llm-agent-memory/memory"
 	ragembed "github.com/costa92/llm-agent-rag/embed"
 	ragstore "github.com/costa92/llm-agent-rag/store"
 )
@@ -16,11 +16,11 @@ type VectorProjector interface {
 }
 
 type RAGVectorProjector struct {
-	embedder            ragembed.Embedder
-	store               ragstore.Store
-	namespace           string
-	metrics             EmbeddingMetricsSink
-	costMicrosPerToken  uint64
+	embedder           ragembed.Embedder
+	store              ragstore.Store
+	namespace          string
+	metrics            EmbeddingMetricsSink
+	costMicrosPerToken uint64
 }
 
 func NewRAGVectorProjector(embedder ragembed.Embedder, store ragstore.Store, namespace string) *RAGVectorProjector {

@@ -9,21 +9,21 @@ import (
 )
 
 const (
-	defaultListenAddr           = ":8080"
-	defaultSessionIdleTTL       = 30 * time.Minute
-	defaultRecallMode           = "lexical"
-	defaultVectorTable          = "memory_gateway_vectors"
-	defaultVectorIndex          = "none"
-	defaultVectorDim            = 32
-	defaultOutboxPoll           = time.Second
-	defaultOutboxBatch          = 100
-	defaultTraceSinkBufferSize  = 1024
-	defaultTraceSinkBatchSize   = 50
-	defaultTraceSinkShutdown    = 5 * time.Second
-	defaultStorageMetricsCycle  = 5 * time.Minute
-	defaultRelayLeaseTTL        = 180 * time.Second
-	defaultRelayMaxAttempts     = 5
-	defaultRelayBatchSize       = 100
+	defaultListenAddr          = ":8080"
+	defaultSessionIdleTTL      = 30 * time.Minute
+	defaultRecallMode          = "lexical"
+	defaultVectorTable         = "memory_gateway_vectors"
+	defaultVectorIndex         = "none"
+	defaultVectorDim           = 32
+	defaultOutboxPoll          = time.Second
+	defaultOutboxBatch         = 100
+	defaultTraceSinkBufferSize = 1024
+	defaultTraceSinkBatchSize  = 50
+	defaultTraceSinkShutdown   = 5 * time.Second
+	defaultStorageMetricsCycle = 5 * time.Minute
+	defaultRelayLeaseTTL       = 180 * time.Second
+	defaultRelayMaxAttempts    = 5
+	defaultRelayBatchSize      = 100
 )
 
 type Config struct {

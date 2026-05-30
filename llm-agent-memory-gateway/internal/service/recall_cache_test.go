@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 	"github.com/costa92/llm-agent-memory-gateway/internal/authz"
 	"github.com/costa92/llm-agent-memory-gateway/internal/httpapi"
-	corememory "github.com/costa92/llm-agent-memory/memory"
 )
 
 type fakeRecallObserver struct {

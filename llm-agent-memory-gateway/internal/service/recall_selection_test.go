@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	corememory "github.com/costa92/llm-agent-memory/memory"
+	corememory "github.com/costa92/llm-agent-memory-contract/contract"
 )
 
 func TestBuildRecallCandidates_SortsTowardPromptFit(t *testing.T) {
