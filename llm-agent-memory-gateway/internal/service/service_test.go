@@ -749,3 +749,76 @@ func TestEnableMemory_ReturnsEnabledMutation(t *testing.T) {
 		t.Fatalf("response = %+v", resp)
 	}
 }
+
+func TestGetMemoryItem_ReturnsMappedRecord(t *testing.T) {
+	backend := &fakeBackend{
+		records: map[string]corememory.MemoryRecord{
+			"mem_abc": {
+				MemoryID:   "mem_abc",
+				Kind:       "semantic",
+				Version:    3,
+				Content:    "hello world",
+				Tags:       []string{"tag1", "tag2"},
+				Source:     "user_saved",
+				Category:   "project",
+				Importance: 0.8,
+				Pinned:     true,
+				Disabled:   false,
+			},
+		},
+	}
+	svc, err := New(backend, nil, nil, nil, Config{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	resp, err := svc.GetMemoryItem(context.Background(), authz.Scope{
+		TenantID: "tenant-auth",
+		UserID:   "user-auth",
+	}, "mem_abc")
+	if err != nil {
+		t.Fatalf("GetMemoryItem() error = %v", err)
+	}
+	if resp.MemoryID != "mem_abc" {
+		t.Fatalf("MemoryID = %q, want mem_abc", resp.MemoryID)
+	}
+	if resp.Kind != "semantic" {
+		t.Fatalf("Kind = %q, want semantic", resp.Kind)
+	}
+	if resp.Version != 3 {
+		t.Fatalf("Version = %d, want 3", resp.Version)
+	}
+	if resp.Content != "hello world" {
+		t.Fatalf("Content = %q, want hello world", resp.Content)
+	}
+	if len(resp.Tags) != 2 || resp.Tags[0] != "tag1" {
+		t.Fatalf("Tags = %v, want [tag1 tag2]", resp.Tags)
+	}
+	if resp.Importance != 0.8 {
+		t.Fatalf("Importance = %f, want 0.8", resp.Importance)
+	}
+	if !resp.Pinned {
+		t.Fatal("Pinned = false, want true")
+	}
+}
+
+func TestGetMemoryItem_NotFound(t *testing.T) {
+	backend := &fakeBackend{
+		getErr: pgmemory.ErrNotFound,
+	}
+	svc, err := New(backend, nil, nil, nil, Config{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = svc.GetMemoryItem(context.Background(), authz.Scope{
+		TenantID: "tenant-auth",
+		UserID:   "user-auth",
+	}, "mem_missing")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := httpapi.StatusCode(err); got != 404 {
+		t.Fatalf("StatusCode(err) = %d, want 404", got)
+	}
+}

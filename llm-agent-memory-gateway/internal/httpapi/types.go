@@ -147,3 +147,16 @@ type SessionHeartbeatResponse struct {
 	SessionID string `json:"session_id"`
 	Status    string `json:"status"`
 }
+
+type GetMemoryItemResponse struct {
+	MemoryID   string   `json:"memory_id"`
+	Kind       string   `json:"kind"`
+	Version    int64    `json:"version"`
+	Content    string   `json:"content"`
+	Tags       []string `json:"tags,omitempty"`
+	Source     string   `json:"source"`
+	Category   string   `json:"category"`
+	Importance float64  `json:"importance,omitempty"`
+	Pinned     bool     `json:"pinned"`
+	Disabled   bool     `json:"disabled"`
+}

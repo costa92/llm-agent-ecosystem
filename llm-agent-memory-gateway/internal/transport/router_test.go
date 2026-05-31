@@ -43,6 +43,9 @@ func (stubService) CloseSession(context.Context, authz.Scope, string, httpapi.Se
 func (stubService) HeartbeatSession(context.Context, authz.Scope, string, httpapi.SessionHeartbeatRequest) (httpapi.SessionHeartbeatResponse, error) {
 	return httpapi.SessionHeartbeatResponse{}, nil
 }
+func (stubService) GetMemoryItem(context.Context, authz.Scope, string) (httpapi.GetMemoryItemResponse, error) {
+	return httpapi.GetMemoryItemResponse{}, nil
+}
 
 func TestRoutes_AreRegistered(t *testing.T) {
 	handler := NewHandler(stubService{}, func(mux *http.ServeMux) {
@@ -64,6 +67,7 @@ func TestRoutes_AreRegistered(t *testing.T) {
 		{method: http.MethodPost, path: "/memory/items/mem_123/disable", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"expected_version":1}`},
 		{method: http.MethodPost, path: "/memory/items/mem_123/enable", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"expected_version":1}`},
 		{method: http.MethodDelete, path: "/memory/items/mem_123", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"expected_version":1,"consistency_level":"strong"}`},
+		{method: http.MethodGet, path: "/memory/items/mem_123", body: ``},
 		{method: http.MethodPost, path: "/memory/sessions/sess_9/close", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1","session_id":"sess_9"},"mode":"expire_working"}`},
 		{method: http.MethodPost, path: "/memory/sessions/sess_9/heartbeat", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1","session_id":"sess_9"}}`},
 		{method: http.MethodGet, path: "/metrics", body: ``},

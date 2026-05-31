@@ -77,6 +77,12 @@ func (g *inMemoryGateway) CloseSession(context.Context, authz.Scope, string, htt
 func (g *inMemoryGateway) HeartbeatSession(context.Context, authz.Scope, string, httpapi.SessionHeartbeatRequest) (httpapi.SessionHeartbeatResponse, error) {
 	return httpapi.SessionHeartbeatResponse{SessionID: "sess_10", Status: "active"}, nil
 }
+func (g *inMemoryGateway) GetMemoryItem(_ context.Context, _ authz.Scope, memoryID string) (httpapi.GetMemoryItemResponse, error) {
+	if g.deleted || g.version == 0 {
+		return httpapi.GetMemoryItemResponse{}, httpapi.ErrNotFound("memory record not found", nil)
+	}
+	return httpapi.GetMemoryItemResponse{MemoryID: memoryID, Kind: "semantic", Version: g.version, Content: "remembered"}, nil
+}
 
 func TestSmoke_WriteRecallPinDisableDeleteClose(t *testing.T) {
 	handler := NewHandler(&inMemoryGateway{})
@@ -88,6 +94,7 @@ func TestSmoke_WriteRecallPinDisableDeleteClose(t *testing.T) {
 		want   int
 	}{
 		{method: http.MethodPost, path: "/memory/write", body: `{"idempotency_key":"idem_1","scope":{"tenant_id":"tenant-a","user_id":"user-1"},"record":{"kind":"semantic","source":"user_saved","category":"project","content":"remember"}}`, want: http.StatusOK},
+		{method: http.MethodGet, path: "/memory/items/mem_123", body: ``, want: http.StatusOK},
 		{method: http.MethodPost, path: "/memory/recall/unified", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"query":"remember"}`, want: http.StatusOK},
 		{method: http.MethodPost, path: "/memory/items/mem_123/pin", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"expected_version":1}`, want: http.StatusOK},
 		{method: http.MethodPost, path: "/memory/items/mem_123/unpin", body: `{"scope":{"tenant_id":"tenant-a","user_id":"user-1"},"expected_version":2}`, want: http.StatusOK},

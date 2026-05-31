@@ -26,6 +26,7 @@ func NewHandler(svc service.Interface, extras ...func(*http.ServeMux)) http.Hand
 	mux.Handle("POST /memory/items/{memory_id}/disable", http.HandlerFunc(api.handleDisableMemory))
 	mux.Handle("POST /memory/items/{memory_id}/enable", http.HandlerFunc(api.handleEnableMemory))
 	mux.Handle("DELETE /memory/items/{memory_id}", http.HandlerFunc(api.handleDeleteMemory))
+	mux.Handle("GET /memory/items/{memory_id}", http.HandlerFunc(api.handleGetMemoryItem))
 	mux.Handle("POST /memory/sessions/{session_id}/close", http.HandlerFunc(api.handleCloseSession))
 	mux.Handle("POST /memory/sessions/{session_id}/heartbeat", http.HandlerFunc(api.handleHeartbeatSession))
 	for _, extra := range extras {

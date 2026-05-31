@@ -76,6 +76,9 @@ func (s *captureService) CloseSession(context.Context, authz.Scope, string, http
 func (s *captureService) HeartbeatSession(context.Context, authz.Scope, string, httpapi.SessionHeartbeatRequest) (httpapi.SessionHeartbeatResponse, error) {
 	return httpapi.SessionHeartbeatResponse{SessionID: "sess_9", Status: "active"}, nil
 }
+func (s *captureService) GetMemoryItem(_ context.Context, _ authz.Scope, memoryID string) (httpapi.GetMemoryItemResponse, error) {
+	return httpapi.GetMemoryItemResponse{MemoryID: memoryID, Kind: "semantic", Version: 7, Content: "remembered"}, nil
+}
 
 func TestWriteHandler_MalformedJSON(t *testing.T) {
 	handler := NewHandler(&captureService{})
@@ -229,5 +232,45 @@ func TestHandlers_UnauthorizedWithoutScopeHeaders(t *testing.T) {
 	}
 	if response.Error.Code != "unauthorized" {
 		t.Fatalf("code = %q, want unauthorized", response.Error.Code)
+	}
+}
+
+func TestGetHandler_ReturnsItemAndVersionHeader(t *testing.T) {
+	handler := NewHandler(&captureService{})
+	req := httptest.NewRequest(http.MethodGet, "/memory/items/mem_abc", nil)
+	req.Header.Set("X-Tenant-Id", "tenant-a")
+	req.Header.Set("X-User-Id", "user-1")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("X-Memory-Version"); got != "7" {
+		t.Fatalf("X-Memory-Version = %q, want 7", got)
+	}
+
+	var response httpapi.GetMemoryItemResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if response.MemoryID != "mem_abc" {
+		t.Fatalf("MemoryID = %q, want mem_abc", response.MemoryID)
+	}
+	if response.Kind != "semantic" {
+		t.Fatalf("Kind = %q, want semantic", response.Kind)
+	}
+}
+
+func TestGetHandler_UnauthorizedWithoutScopeHeaders(t *testing.T) {
+	handler := NewHandler(&captureService{})
+	req := httptest.NewRequest(http.MethodGet, "/memory/items/mem_abc", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
 	}
 }

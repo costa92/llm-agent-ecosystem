@@ -51,6 +51,7 @@ type Interface interface {
 	DeleteMemory(ctx context.Context, authScope authz.Scope, memoryID string, req httpapi.DeleteMemoryRequest) (httpapi.DeleteMemoryResponse, error)
 	CloseSession(ctx context.Context, authScope authz.Scope, sessionID string, req httpapi.SessionCloseRequest) (httpapi.SessionCloseResponse, error)
 	HeartbeatSession(ctx context.Context, authScope authz.Scope, sessionID string, req httpapi.SessionHeartbeatRequest) (httpapi.SessionHeartbeatResponse, error)
+	GetMemoryItem(ctx context.Context, authScope authz.Scope, memoryID string) (httpapi.GetMemoryItemResponse, error)
 }
 
 type Service struct {
@@ -597,6 +598,25 @@ func (s *Service) HeartbeatSession(ctx context.Context, authScope authz.Scope, s
 	return httpapi.SessionHeartbeatResponse{
 		SessionID: state.SessionID,
 		Status:    state.Status,
+	}, nil
+}
+
+func (s *Service) GetMemoryItem(ctx context.Context, authScope authz.Scope, memoryID string) (httpapi.GetMemoryItemResponse, error) {
+	record, err := s.backend.GetRecord(ctx, authScope.TenantID, memoryID)
+	if err != nil {
+		return httpapi.GetMemoryItemResponse{}, translateBackendError(err)
+	}
+	return httpapi.GetMemoryItemResponse{
+		MemoryID:   record.MemoryID,
+		Kind:       record.Kind,
+		Version:    record.Version,
+		Content:    record.Content,
+		Tags:       record.Tags,
+		Source:     record.Source,
+		Category:   record.Category,
+		Importance: record.Importance,
+		Pinned:     record.Pinned,
+		Disabled:   record.Disabled,
 	}, nil
 }
 
