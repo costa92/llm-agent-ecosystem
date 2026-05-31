@@ -77,6 +77,7 @@ type WriteMemoryResult struct {
 }
 
 type PatchMemoryRequest struct {
+	IdempotencyKey  string            `json:"idempotency_key,omitempty"`
 	Scope           ScopePayload      `json:"scope"`
 	ExpectedVersion int64             `json:"expected_version"`
 	Patch           PatchMemoryFields `json:"patch"`

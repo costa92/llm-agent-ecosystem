@@ -37,6 +37,7 @@ type Config struct {
 	SessionIdleTTL      time.Duration
 	RecallObserver      RecallObserver
 	RecallCacheObserver RecallCacheObserver
+	IdempotencyStore    corememory.IdempotencyStore
 }
 
 type Interface interface {
@@ -64,6 +65,7 @@ type Service struct {
 	sessionIdleTTL      time.Duration
 	recallObserver      RecallObserver
 	recallCacheObserver RecallCacheObserver
+	idempotencyStore    corememory.IdempotencyStore
 }
 
 var _ Interface = (*Service)(nil)
@@ -91,6 +93,7 @@ func New(backend DurableBackend, recaller RecallBackend, sessionCloser SessionCl
 		sessionIdleTTL:      resolveSessionIdleTTL(cfg.SessionIdleTTL),
 		recallObserver:      resolveRecallObserver(cfg.RecallObserver),
 		recallCacheObserver: resolveRecallCacheObserver(cfg.RecallCacheObserver),
+		idempotencyStore:    cfg.IdempotencyStore,
 	}, nil
 }
 
@@ -309,6 +312,58 @@ func (s *Service) PatchMemory(ctx context.Context, authScope authz.Scope, memory
 	}
 
 	scope := mergeScope(authScope, req.Scope)
+
+	if strings.TrimSpace(req.IdempotencyKey) != "" && s.idempotencyStore != nil {
+		requestHash := hashPatchRequest(scope, memoryID, req)
+		entry, err := s.idempotencyStore.LoadIdempotency(ctx, scope.TenantID, req.IdempotencyKey)
+		if err != nil && !errors.Is(err, pgmemory.ErrNotFound) {
+			return httpapi.PatchMemoryResponse{}, translateBackendError(err)
+		}
+		if err == nil {
+			// Key exists — replay or conflict.
+			if entry.RequestHash != requestHash {
+				return httpapi.PatchMemoryResponse{}, httpapi.ErrIdempotencyConflict("idempotency_key conflicts with an existing payload", nil)
+			}
+			return httpapi.PatchMemoryResponse{
+				MemoryID: entry.Response.MemoryID,
+				Version:  entry.Response.Version,
+			}, nil
+		}
+		// Key not found — run the patch then save the snapshot.
+		result, err := s.doPatchRecord(ctx, scope, memoryID, req)
+		if err != nil {
+			return httpapi.PatchMemoryResponse{}, err
+		}
+		snap := corememory.IdempotencyEntry{
+			TenantID:       scope.TenantID,
+			IdempotencyKey: req.IdempotencyKey,
+			RequestHash:    requestHash,
+			MemoryID:       result.MemoryID,
+			Response: corememory.WriteRecordResult{
+				MemoryID: result.MemoryID,
+				Version:  result.Version,
+				Record:   result.Record,
+			},
+			CreatedAt: time.Now().UTC(),
+		}
+		if saveErr := s.idempotencyStore.SaveIdempotency(ctx, snap); saveErr != nil {
+			// Best-effort: the patch already committed; log via translateBackendError
+			// shape but don't fail the caller — they got the patched result.
+			_ = saveErr
+		}
+		s.invalidateScopeState(ctx, scope)
+		return httpapi.PatchMemoryResponse{MemoryID: result.MemoryID, Version: result.Version}, nil
+	}
+
+	result, err := s.doPatchRecord(ctx, scope, memoryID, req)
+	if err != nil {
+		return httpapi.PatchMemoryResponse{}, err
+	}
+	s.invalidateScopeState(ctx, scope)
+	return httpapi.PatchMemoryResponse{MemoryID: result.MemoryID, Version: result.Version}, nil
+}
+
+func (s *Service) doPatchRecord(ctx context.Context, scope authz.Scope, memoryID string, req httpapi.PatchMemoryRequest) (corememory.PatchRecordResult, error) {
 	input := corememory.PatchRecordInput{
 		TenantID:        scope.TenantID,
 		MemoryID:        memoryID,
@@ -326,13 +381,11 @@ func (s *Service) PatchMemory(ctx context.Context, authScope authz.Scope, memory
 	if req.Patch.Importance != nil {
 		input.Importance = *req.Patch.Importance
 	}
-
 	result, err := s.backend.PatchRecord(ctx, input)
 	if err != nil {
-		return httpapi.PatchMemoryResponse{}, translateBackendError(err)
+		return corememory.PatchRecordResult{}, translateBackendError(err)
 	}
-	s.invalidateScopeState(ctx, scope)
-	return httpapi.PatchMemoryResponse{MemoryID: result.MemoryID, Version: result.Version}, nil
+	return result, nil
 }
 
 func (s *Service) PinMemory(ctx context.Context, authScope authz.Scope, memoryID string, req httpapi.PinMemoryRequest) (httpapi.PinMemoryResponse, error) {
@@ -570,6 +623,23 @@ func hashWriteRequest(scope authz.Scope, record httpapi.WriteRecordPayload) stri
 	}{
 		Scope:  scope,
 		Record: record,
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func hashPatchRequest(scope authz.Scope, memoryID string, req httpapi.PatchMemoryRequest) string {
+	payload := struct {
+		Scope           authz.Scope               `json:"scope"`
+		MemoryID        string                    `json:"memory_id"`
+		ExpectedVersion int64                     `json:"expected_version"`
+		Patch           httpapi.PatchMemoryFields `json:"patch"`
+	}{
+		Scope:           scope,
+		MemoryID:        memoryID,
+		ExpectedVersion: req.ExpectedVersion,
+		Patch:           req.Patch,
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)

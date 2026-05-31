@@ -150,6 +150,7 @@ func buildHandler(ctx context.Context, logger *slog.Logger, cfg config.Config) (
 			SessionIdleTTL:      cfg.SessionIdleTTL,
 			RecallObserver:      metrics.RecallObserver(),
 			RecallCacheObserver: metrics.RecallCacheObserver(),
+			IdempotencyStore:    store,
 		},
 	)
 	if err != nil {
