@@ -165,6 +165,18 @@ case "$command" in
       run_go_cmd "$repo" 'go test ./... -count=1'
     done <<<"$targets"
     ;;
+  release-check)
+    # Skew-honest pre-release gate: build + vet each module with GOWORK=off so
+    # only that module's own go.mod (+ its replaces) resolve deps — the
+    # workspace cannot mask a tagged-graph break. Mirrors the umbrella CI
+    # cross-repo-build job locally. Tests are excluded (some modules need a
+    # live Postgres); use `eco.sh test <repo>` for those.
+    targets="$(normalize_targets "${1:-all}" all_repos)"
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      run_go_cmd "$repo" 'go build ./... && go vet ./...'
+    done <<<"$targets"
+    ;;
   up|down)
     targets="$(normalize_targets "${1:-all}" launchable_repos)"
     while IFS= read -r repo; do
@@ -184,6 +196,7 @@ ecosystem commands:
   status [all|repo1,repo2]
   build [all|repo1,repo2]
   test [all|repo1,repo2]
+  release-check [all|repo1,repo2]
   up [all|llm-agent-otel,llm-agent-customer-support]
   down [all|llm-agent-otel,llm-agent-customer-support]
 EOF
