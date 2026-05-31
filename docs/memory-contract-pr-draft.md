@@ -1,18 +1,3 @@
-<!--
-PR DRAFT — ready to use once a remote is configured.
-
-This umbrella repo currently has NO git remote and `gh` is not authenticated,
-so the PR cannot be opened automatically. When ready:
-
-  git remote add origin <url>
-  git push -u origin feat/memory-contract-extraction
-  gh pr create --base main --head feat/memory-contract-extraction \
-    --title "$(sed -n 's/^# //p' docs/memory-contract-pr-draft.md | head -1)" \
-    --body-file docs/memory-contract-pr-draft.md
-
-(The title line below is the first H1; the body is everything under it.)
--->
-
 # refactor(memory): extract durable contract into `llm-agent-memory-contract` and repoint satellites
 
 ## Summary
@@ -29,7 +14,7 @@ Implements **Proposal 2** from `docs/memory-cluster-evolution-design.zh-CN.md`
 (a two-round-reviewed design: Plan-agent + codex). Branch:
 `feat/memory-contract-extraction` (12 commits).
 
-Scope: **67 files, +4521 / −38.**
+Scope: **64 files, +4184 / −151.**
 
 ## What's in this PR (Phases 1–4 + 6)
 
