@@ -25,23 +25,29 @@ llm-agent-ecosystem/
 ├── llm-agent-customer-support/      # demo customer-support reference service
 ├── llm-agent-flow/                  # serializable flow IR + DAG executor (v0.1.x stable)
 ├── llm-agent-memory/                # SDK-only durable memory abstractions and manager surface
+├── llm-agent-memory-contract/       # backend-neutral durable contract (records, events, outbox)
 ├── llm-agent-memory-postgres/       # Postgres durable backend + transactional outbox relay
-└── llm-agent-memory-gateway/        # HTTP gateway, recall cache, session lifecycle, metrics
+├── llm-agent-memory-gateway/        # HTTP gateway, recall cache, session lifecycle, metrics
+├── llm-agent-memory-worker/         # async consolidation worker (outbox → working→episodic)
+└── llm-agent-memory-client/         # stdlib-only Go HTTP client for the memory gateway
 ```
 
 ## Repository roster
 
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
-| `llm-agent` | core framework, agent paradigms, memory, RAG facade, `llm/v2` | **v0.7.0** | `main` | <https://github.com/costa92/llm-agent> |
+| `llm-agent` | core framework, agent paradigms, memory, `llm/v2` | **v0.7.0** | `main` | <https://github.com/costa92/llm-agent> |
 | `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.9.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.3.0** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.5** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
 | `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.4** | `main` | <https://github.com/costa92/llm-agent-flow> |
 | `llm-agent-memory` | SDK-only memory package and stable durable abstractions | **v1.0.0** | `main` | <https://github.com/costa92/llm-agent-memory> |
+| `llm-agent-memory-contract` | backend-neutral durable contract (records, events, outbox, idempotency) | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-contract> |
 | `llm-agent-memory-postgres` | concrete Postgres memory backend, migrations, and outbox relay | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-postgres> |
 | `llm-agent-memory-gateway` | HTTP memory gateway, recall cache, session state, and metrics | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-gateway> |
+| `llm-agent-memory-worker` | async consolidation worker — drains outbox, promotes working→episodic | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-worker> |
+| `llm-agent-memory-client` | stdlib-only Go HTTP client for the memory gateway | **unreleased** | `main` | <https://github.com/costa92/llm-agent-memory-client> |
 
 Tag layout as of the v1.1 close (2026-05-20) + `llm-agent-flow`
 introduced 2026-05-21 (v0.0.1 walking skeleton → v0.0.2 per-layer
