@@ -296,3 +296,28 @@ jobs:
 
       - name: Run stdlib-only assertion gate
         run: bash scripts/stdlib-only-check.sh
+
+  regex-parity-gate:
+    name: B5 — PII/injection regex parity (core <-> rag)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout umbrella root
+        uses: actions/checkout@v4
+
+      - name: Checkout llm-agent
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent
+          ref: main
+          path: llm-agent
+
+      - name: Checkout llm-agent-rag
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-rag
+          ref: master
+          path: llm-agent-rag
+
+      - name: Run regex parity gate
+        run: bash scripts/regex-parity-check.sh
