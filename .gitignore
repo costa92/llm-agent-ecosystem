@@ -12,6 +12,7 @@
 /llm-agent-memory-gateway/
 /llm-agent-memory-postgres/
 /llm-agent-memory-worker/
+/llm-agent-memory-client/
 /go.work.sum
 /cmd/depcheck/depcheck
 /cmd/depcheck/depcheck.json
