@@ -8,6 +8,7 @@ use (
 	./llm-agent-memory
 	./llm-agent-memory-gateway
 	./llm-agent-memory-postgres
+	./llm-agent-memory-worker
 	./llm-agent-otel
 	./llm-agent-providers
 	./llm-agent-rag
