@@ -155,3 +155,26 @@ func TestHeartbeatSession_ReplayIdempotent(t *testing.T) {
 		t.Fatalf("StatusCode(err) = %d, want 403", got)
 	}
 }
+
+// TestCloseSession_FirstClose_InvokesCloserAndTrace guards that reordering the
+// registry consult before the closer call did not drop the first-close side
+// effects: the closer runs once and the promote_decided trace is emitted once.
+func TestCloseSession_FirstClose_InvokesCloserAndTrace(t *testing.T) {
+	closer := &recordingSessionCloser{}
+	trace := &fakeTraceEmitter{}
+	svc := newCloseTestService(t, closer, trace)
+
+	resp, err := svc.CloseSession(context.Background(), closeScope(), "session-path", httpapi.SessionCloseRequest{Mode: "expire_working"})
+	if err != nil {
+		t.Fatalf("CloseSession() error = %v", err)
+	}
+	if resp.Status != "closed" {
+		t.Fatalf("resp.Status = %q, want closed", resp.Status)
+	}
+	if closer.calls != 1 {
+		t.Fatalf("closer.calls = %d, want 1", closer.calls)
+	}
+	if got := countPromoteDecided(trace); got != 1 {
+		t.Fatalf("promote_decided emissions = %d, want 1", got)
+	}
+}
