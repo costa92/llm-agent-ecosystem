@@ -54,6 +54,13 @@ jobs:
           ref: main
           path: llm-agent-customer-support
 
+      - name: Checkout llm-agent-memory-contract
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-memory-contract
+          ref: main
+          path: llm-agent-memory-contract
+
       - name: Checkout llm-agent-memory
         uses: actions/checkout@v4
         with:
@@ -74,6 +81,13 @@ jobs:
           repository: costa92/llm-agent-memory-postgres
           ref: main
           path: llm-agent-memory-postgres
+
+      - name: Checkout llm-agent-memory-worker
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-memory-worker
+          ref: main
+          path: llm-agent-memory-worker
 
       - uses: actions/setup-go@v5
         with:
@@ -123,6 +137,13 @@ jobs:
           GOWORK=off go build ./...
           GOWORK=off go test ./... -count=1
 
+      - name: Build llm-agent-memory-contract
+        working-directory: llm-agent-memory-contract
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
       - name: Build llm-agent-memory
         working-directory: llm-agent-memory
         run: |
@@ -139,6 +160,13 @@ jobs:
 
       - name: Build llm-agent-memory-postgres
         working-directory: llm-agent-memory-postgres
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-memory-worker
+        working-directory: llm-agent-memory-worker
         run: |
           GOWORK=off go vet ./...
           GOWORK=off go build ./...

@@ -8,6 +8,10 @@
 /llm-agent-customer-support/
 /llm-agent-flow/
 /llm-agent-memory/
+/llm-agent-memory-contract/
+/llm-agent-memory-gateway/
+/llm-agent-memory-postgres/
+/llm-agent-memory-worker/
 /go.work.sum
 /cmd/depcheck/depcheck
 /cmd/depcheck/depcheck.json
