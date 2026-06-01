@@ -173,6 +173,82 @@ func TestPinMemory_NotFound(t *testing.T) {
 	}
 }
 
+// TestPinMemory_ExactVersion_ShortCircuits pins the `<=` boundary: an already
+// pinned record at version 4 with ExpectedVersion=4 must short-circuit (not
+// re-run the backend). This guards against a regression flipping `<=` to `<`,
+// which would fall through and bump the version to 5.
+func TestPinMemory_ExactVersion_ShortCircuits(t *testing.T) {
+	backend := newRecordingPinBackend()
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 4, Pinned: true}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	resp, err := svc.PinMemory(context.Background(), scope, "mem_pin", httpapi.PinMemoryRequest{ExpectedVersion: 4})
+	if err != nil {
+		t.Fatalf("PinMemory at exact version should short-circuit: %v", err)
+	}
+	if !resp.Pinned || resp.Version != 4 {
+		t.Fatalf("resp = %+v, want Pinned=true Version=4", resp)
+	}
+	if backend.pinCalls != 0 {
+		t.Fatalf("pinCalls = %d, want 0 (short-circuited at exact version)", backend.pinCalls)
+	}
+}
+
+// TestPinMemory_ExpectedVersionAhead_Conflict: the record is in the desired
+// state but the caller's ExpectedVersion is AHEAD of the stored version, so the
+// `<=` guard is false and the request falls through to the backend, which 409s.
+// A genuine version disagreement must not be masked as an idempotent success.
+func TestPinMemory_ExpectedVersionAhead_Conflict(t *testing.T) {
+	backend := newRecordingPinBackend()
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 4, Pinned: true}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	_, err := svc.PinMemory(context.Background(), scope, "mem_pin", httpapi.PinMemoryRequest{ExpectedVersion: 5})
+	if err == nil {
+		t.Fatal("expected conflict when ExpectedVersion is ahead of stored version, got nil")
+	}
+	if got := httpapi.StatusCode(err); got != 409 {
+		t.Fatalf("StatusCode(err) = %d, want 409", got)
+	}
+}
+
+// TestPinMemory_FreshConflict: a record NOT in the desired state (unpinned)
+// with a stale ExpectedVersion must NOT short-circuit and must surface the
+// backend's genuine version conflict (409) — the active path is still guarded.
+func TestPinMemory_FreshConflict(t *testing.T) {
+	backend := newRecordingPinBackend()
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 4, Pinned: false}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	_, err := svc.PinMemory(context.Background(), scope, "mem_pin", httpapi.PinMemoryRequest{ExpectedVersion: 3})
+	if err == nil {
+		t.Fatal("expected conflict on stale ExpectedVersion for a non-pinned record, got nil")
+	}
+	if got := httpapi.StatusCode(err); got != 409 {
+		t.Fatalf("StatusCode(err) = %d, want 409", got)
+	}
+	if backend.pinCalls != 1 {
+		t.Fatalf("pinCalls = %d, want 1 (fell through to the guarded backend)", backend.pinCalls)
+	}
+}
+
+func TestUnpinMemory_NotFound(t *testing.T) {
+	backend := newRecordingPinBackend()
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	_, err := svc.UnpinMemory(context.Background(), scope, "missing", httpapi.PinMemoryRequest{ExpectedVersion: 1})
+	if err == nil {
+		t.Fatal("expected not-found error, got nil")
+	}
+	if got := httpapi.StatusCode(err); got != 404 {
+		t.Fatalf("StatusCode(err) = %d, want 404", got)
+	}
+}
+
 func TestUnpinMemory_Idempotent_UnpinTwice(t *testing.T) {
 	backend := newRecordingPinBackend()
 	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 3, Pinned: true}
