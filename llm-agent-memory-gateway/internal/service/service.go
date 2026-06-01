@@ -513,6 +513,15 @@ func (s *Service) EnableMemory(ctx context.Context, authScope authz.Scope, memor
 	}
 
 	scope := mergeScope(authScope, req.Scope)
+	if record, ok := s.terminalStateShortCircuit(ctx, scope, memoryID, req.ExpectedVersion, func(r corememory.MemoryRecord) bool {
+		return !r.Disabled
+	}); ok {
+		return httpapi.DisableMemoryResponse{
+			MemoryID: record.MemoryID,
+			Version:  record.Version,
+			Disabled: false,
+		}, nil
+	}
 	result, err := s.backend.DisableRecord(ctx, corememory.DisableRecordInput{
 		TenantID:        scope.TenantID,
 		MemoryID:        memoryID,

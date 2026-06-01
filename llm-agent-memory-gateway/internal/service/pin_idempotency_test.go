@@ -240,3 +240,41 @@ func TestUnpinMemory_StaleVersionReplay_NoConflict(t *testing.T) {
 		t.Fatalf("unpinCalls = %d, want 0 (short-circuited)", backend.unpinCalls)
 	}
 }
+
+func TestEnableMemory_Idempotent_AlreadyEnabled(t *testing.T) {
+	backend := newRecordingPinBackend()
+	// Visible, already enabled (Disabled==false) at version 4; stale retry.
+	backend.records["mem_en"] = corememory.MemoryRecord{MemoryID: "mem_en", Version: 4, Disabled: false}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	resp, err := svc.EnableMemory(context.Background(), scope, "mem_en", httpapi.DisableMemoryRequest{ExpectedVersion: 3})
+	if err != nil {
+		t.Fatalf("EnableMemory should short-circuit: %v", err)
+	}
+	if resp.Disabled || resp.Version != 4 {
+		t.Fatalf("resp = %+v, want Disabled=false Version=4", resp)
+	}
+	if backend.enableCalls != 0 {
+		t.Fatalf("enableCalls = %d, want 0 (short-circuited)", backend.enableCalls)
+	}
+}
+
+func TestEnableMemory_Disabled_FallsThrough(t *testing.T) {
+	backend := newRecordingPinBackend()
+	// Disabled record is invisible to GetRecord → no short-circuit → backend runs.
+	backend.records["mem_en"] = corememory.MemoryRecord{MemoryID: "mem_en", Version: 5, Disabled: true}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	resp, err := svc.EnableMemory(context.Background(), scope, "mem_en", httpapi.DisableMemoryRequest{ExpectedVersion: 5})
+	if err != nil {
+		t.Fatalf("EnableMemory: %v", err)
+	}
+	if resp.Disabled || resp.Version != 6 {
+		t.Fatalf("resp = %+v, want Disabled=false Version=6", resp)
+	}
+	if backend.enableCalls != 1 {
+		t.Fatalf("enableCalls = %d, want 1 (fell through)", backend.enableCalls)
+	}
+}
