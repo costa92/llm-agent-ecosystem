@@ -452,6 +452,15 @@ func (s *Service) UnpinMemory(ctx context.Context, authScope authz.Scope, memory
 	}
 
 	scope := mergeScope(authScope, req.Scope)
+	if record, ok := s.terminalStateShortCircuit(ctx, scope, memoryID, req.ExpectedVersion, func(r corememory.MemoryRecord) bool {
+		return !r.Pinned
+	}); ok {
+		return httpapi.PinMemoryResponse{
+			MemoryID: record.MemoryID,
+			Version:  record.Version,
+			Pinned:   false,
+		}, nil
+	}
 	result, err := s.backend.PinRecord(ctx, corememory.PinRecordInput{
 		TenantID:        scope.TenantID,
 		MemoryID:        memoryID,

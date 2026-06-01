@@ -172,3 +172,71 @@ func TestPinMemory_NotFound(t *testing.T) {
 		t.Fatalf("StatusCode(err) = %d, want 404", got)
 	}
 }
+
+func TestUnpinMemory_Idempotent_UnpinTwice(t *testing.T) {
+	backend := newRecordingPinBackend()
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 3, Pinned: true}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	req := httpapi.PinMemoryRequest{ExpectedVersion: 3}
+
+	first, err := svc.UnpinMemory(context.Background(), scope, "mem_pin", req)
+	if err != nil {
+		t.Fatalf("first UnpinMemory: %v", err)
+	}
+	if first.Version != 4 || first.Pinned {
+		t.Fatalf("first result = %+v, want Version=4 Pinned=false", first)
+	}
+	if backend.unpinCalls != 1 {
+		t.Fatalf("unpinCalls after first = %d, want 1", backend.unpinCalls)
+	}
+
+	second, err := svc.UnpinMemory(context.Background(), scope, "mem_pin", req)
+	if err != nil {
+		t.Fatalf("second UnpinMemory: %v", err)
+	}
+	if second.Version != 4 || second.Pinned {
+		t.Fatalf("second result = %+v, want Version=4 Pinned=false", second)
+	}
+	if backend.unpinCalls != 1 {
+		t.Fatalf("unpinCalls after replay = %d, want 1 (short-circuited)", backend.unpinCalls)
+	}
+}
+
+func TestUnpinMemory_Fresh(t *testing.T) {
+	backend := newRecordingPinBackend()
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 5, Pinned: true}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	resp, err := svc.UnpinMemory(context.Background(), scope, "mem_pin", httpapi.PinMemoryRequest{ExpectedVersion: 5})
+	if err != nil {
+		t.Fatalf("UnpinMemory: %v", err)
+	}
+	if resp.Pinned || resp.Version != 6 {
+		t.Fatalf("resp = %+v, want Pinned=false Version=6", resp)
+	}
+	if backend.unpinCalls != 1 {
+		t.Fatalf("unpinCalls = %d, want 1", backend.unpinCalls)
+	}
+}
+
+func TestUnpinMemory_StaleVersionReplay_NoConflict(t *testing.T) {
+	backend := newRecordingPinBackend()
+	// Already unpinned at version 4; client retries with stale ExpectedVersion=3.
+	backend.records["mem_pin"] = corememory.MemoryRecord{MemoryID: "mem_pin", Version: 4, Pinned: false}
+	svc := newPinService(t, backend)
+
+	scope := authz.Scope{TenantID: "tenant", UserID: "user"}
+	resp, err := svc.UnpinMemory(context.Background(), scope, "mem_pin", httpapi.PinMemoryRequest{ExpectedVersion: 3})
+	if err != nil {
+		t.Fatalf("UnpinMemory should not 409 on stale replay: %v", err)
+	}
+	if resp.Pinned || resp.Version != 4 {
+		t.Fatalf("resp = %+v, want Pinned=false Version=4", resp)
+	}
+	if backend.unpinCalls != 0 {
+		t.Fatalf("unpinCalls = %d, want 0 (short-circuited)", backend.unpinCalls)
+	}
+}
