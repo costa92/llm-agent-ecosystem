@@ -398,6 +398,15 @@ func (s *Service) PinMemory(ctx context.Context, authScope authz.Scope, memoryID
 	}
 
 	scope := mergeScope(authScope, req.Scope)
+	if record, ok := s.terminalStateShortCircuit(ctx, scope, memoryID, req.ExpectedVersion, func(r corememory.MemoryRecord) bool {
+		return r.Pinned
+	}); ok {
+		return httpapi.PinMemoryResponse{
+			MemoryID: record.MemoryID,
+			Version:  record.Version,
+			Pinned:   true,
+		}, nil
+	}
 	result, err := s.backend.PinRecord(ctx, corememory.PinRecordInput{
 		TenantID:        scope.TenantID,
 		MemoryID:        memoryID,
@@ -413,6 +422,25 @@ func (s *Service) PinMemory(ctx context.Context, authScope authz.Scope, memoryID
 		Version:  result.Version,
 		Pinned:   result.Record.Pinned,
 	}, nil
+}
+
+// terminalStateShortCircuit reads the current record and reports whether a
+// pin/unpin/enable mutation can be replayed as a no-op success. It returns
+// (record, true) only when the record is already in the desired terminal state
+// AND the caller's expectedVersion is not ahead of the stored version — a
+// retry after the first mutation already succeeded. On any GetRecord error
+// (including ErrNotFound for deleted/disabled records) it returns ok=false so
+// the caller falls through to the backend mutation, which surfaces the
+// canonical error and enforces optimistic concurrency.
+func (s *Service) terminalStateShortCircuit(ctx context.Context, scope authz.Scope, memoryID string, expectedVersion int64, desired func(corememory.MemoryRecord) bool) (corememory.MemoryRecord, bool) {
+	record, err := s.backend.GetRecord(ctx, scope.TenantID, memoryID)
+	if err != nil {
+		return corememory.MemoryRecord{}, false
+	}
+	if desired(record) && expectedVersion <= record.Version {
+		return record, true
+	}
+	return corememory.MemoryRecord{}, false
 }
 
 func (s *Service) UnpinMemory(ctx context.Context, authScope authz.Scope, memoryID string, req httpapi.PinMemoryRequest) (httpapi.PinMemoryResponse, error) {
