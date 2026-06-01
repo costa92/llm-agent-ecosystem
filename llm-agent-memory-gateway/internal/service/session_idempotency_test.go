@@ -116,3 +116,42 @@ func TestCloseSession_Replay_PreservesFirstCloseState(t *testing.T) {
 		t.Fatalf("closer.modes = %v, want [promote_and_expire]", closer.modes)
 	}
 }
+
+// TestHeartbeatSession_ReplayIdempotent characterizes heartbeat idempotency:
+// two heartbeats on an active session both report active with no error, and a
+// heartbeat after close is rejected with the forbidden "session is closed" error.
+func TestHeartbeatSession_ReplayIdempotent(t *testing.T) {
+	closer := &recordingSessionCloser{}
+	trace := &fakeTraceEmitter{}
+	svc := newCloseTestService(t, closer, trace)
+
+	scope := closeScope()
+
+	first, err := svc.HeartbeatSession(context.Background(), scope, "session-path", httpapi.SessionHeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("first HeartbeatSession() error = %v", err)
+	}
+	if first.Status != "active" || first.SessionID != "session-auth" {
+		t.Fatalf("first response = %+v", first)
+	}
+
+	second, err := svc.HeartbeatSession(context.Background(), scope, "session-path", httpapi.SessionHeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("second HeartbeatSession() error = %v", err)
+	}
+	if second.Status != "active" || second.SessionID != "session-auth" {
+		t.Fatalf("second response = %+v", second)
+	}
+
+	if _, err := svc.CloseSession(context.Background(), scope, "session-path", httpapi.SessionCloseRequest{Mode: "expire_working"}); err != nil {
+		t.Fatalf("CloseSession() error = %v", err)
+	}
+
+	_, err = svc.HeartbeatSession(context.Background(), scope, "session-path", httpapi.SessionHeartbeatRequest{})
+	if err == nil {
+		t.Fatal("expected forbidden error on heartbeat after close, got nil")
+	}
+	if got := httpapi.StatusCode(err); got != 403 {
+		t.Fatalf("StatusCode(err) = %d, want 403", got)
+	}
+}
