@@ -89,6 +89,13 @@ jobs:
           ref: main
           path: llm-agent-memory-worker
 
+      - name: Checkout llm-agent-memory-client
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-memory-client
+          ref: main
+          path: llm-agent-memory-client
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.0'
@@ -167,6 +174,13 @@ jobs:
 
       - name: Build llm-agent-memory-worker
         working-directory: llm-agent-memory-worker
+        run: |
+          GOWORK=off go vet ./...
+          GOWORK=off go build ./...
+          GOWORK=off go test ./... -count=1
+
+      - name: Build llm-agent-memory-client
+        working-directory: llm-agent-memory-client
         run: |
           GOWORK=off go vet ./...
           GOWORK=off go build ./...
