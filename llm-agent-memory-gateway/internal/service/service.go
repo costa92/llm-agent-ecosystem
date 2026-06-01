@@ -538,6 +538,19 @@ func (s *Service) CloseSession(ctx context.Context, authScope authz.Scope, sessi
 	if req.Mode != "expire_working" && req.Mode != "promote_and_expire" {
 		return httpapi.SessionCloseResponse{}, httpapi.ErrBadRequest("mode must be expire_working or promote_and_expire", nil)
 	}
+	existing, ok, err := s.sessionRegistry.Get(ctx, scope)
+	if err != nil {
+		return httpapi.SessionCloseResponse{}, translateBackendError(err)
+	}
+	if ok && existing.Status == "closed" {
+		// Idempotent replay: session already closed. Skip the closer (avoids
+		// double promote/expire and a duplicate promote_decided trace) and
+		// reconcile the caller with the current closed state.
+		return httpapi.SessionCloseResponse{
+			SessionID: existing.SessionID,
+			Status:    existing.Status,
+		}, nil
+	}
 	if s.sessionCloser != nil {
 		if err := s.sessionCloser.CloseSession(ctx, scope, req.Mode); err != nil {
 			return httpapi.SessionCloseResponse{}, translateBackendError(err)

@@ -1,0 +1,118 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"github.com/costa92/llm-agent-memory-gateway/internal/authz"
+	"github.com/costa92/llm-agent-memory-gateway/internal/httpapi"
+)
+
+// recordingSessionCloser implements SessionCloser and records every invocation
+// (call count + the modes it was invoked with, in order).
+type recordingSessionCloser struct {
+	calls int
+	modes []string
+	err   error
+}
+
+func (c *recordingSessionCloser) CloseSession(_ context.Context, _ authz.Scope, mode string) error {
+	c.calls++
+	c.modes = append(c.modes, mode)
+	return c.err
+}
+
+// countPromoteDecided returns the number of "promote_decided" trace events.
+func countPromoteDecided(trace *fakeTraceEmitter) int {
+	n := 0
+	for _, e := range trace.events {
+		if e.stage == "promote_decided" {
+			n++
+		}
+	}
+	return n
+}
+
+func newCloseTestService(t *testing.T, closer *recordingSessionCloser, trace *fakeTraceEmitter) *Service {
+	t.Helper()
+	svc, err := New(&fakeBackend{}, nil, closer, trace, Config{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return svc
+}
+
+func closeScope() authz.Scope {
+	return authz.Scope{
+		TenantID:  "tenant-auth",
+		UserID:    "user-auth",
+		ProjectID: "project-auth",
+		SessionID: "session-auth",
+	}
+}
+
+// TestCloseSession_Idempotent_CloserInvokedOnce asserts that closing the same
+// session twice invokes the underlying closer exactly once and emits the
+// promote_decided trace exactly once, while both responses reconcile to the
+// closed state.
+func TestCloseSession_Idempotent_CloserInvokedOnce(t *testing.T) {
+	closer := &recordingSessionCloser{}
+	trace := &fakeTraceEmitter{}
+	svc := newCloseTestService(t, closer, trace)
+
+	scope := closeScope()
+
+	first, err := svc.CloseSession(context.Background(), scope, "session-path", httpapi.SessionCloseRequest{Mode: "expire_working"})
+	if err != nil {
+		t.Fatalf("first CloseSession() error = %v", err)
+	}
+	if want := (httpapi.SessionCloseResponse{SessionID: "session-auth", Status: "closed"}); first != want {
+		t.Fatalf("first response = %+v, want %+v", first, want)
+	}
+
+	second, err := svc.CloseSession(context.Background(), scope, "session-path", httpapi.SessionCloseRequest{Mode: "expire_working"})
+	if err != nil {
+		t.Fatalf("second CloseSession() error = %v", err)
+	}
+	if want := (httpapi.SessionCloseResponse{SessionID: "session-auth", Status: "closed"}); second != want {
+		t.Fatalf("second response = %+v, want %+v", second, want)
+	}
+
+	if closer.calls != 1 {
+		t.Fatalf("closer.calls = %d, want 1", closer.calls)
+	}
+	if got := countPromoteDecided(trace); got != 1 {
+		t.Fatalf("promote_decided emissions = %d, want 1", got)
+	}
+}
+
+// TestCloseSession_Replay_PreservesFirstCloseState asserts first-write-wins on
+// mode: a replayed close with a different mode never reaches the closer and the
+// response still reflects the closed state.
+func TestCloseSession_Replay_PreservesFirstCloseState(t *testing.T) {
+	closer := &recordingSessionCloser{}
+	trace := &fakeTraceEmitter{}
+	svc := newCloseTestService(t, closer, trace)
+
+	scope := closeScope()
+
+	first, err := svc.CloseSession(context.Background(), scope, "session-path", httpapi.SessionCloseRequest{Mode: "promote_and_expire"})
+	if err != nil {
+		t.Fatalf("first CloseSession() error = %v", err)
+	}
+
+	second, err := svc.CloseSession(context.Background(), scope, "session-path", httpapi.SessionCloseRequest{Mode: "expire_working"})
+	if err != nil {
+		t.Fatalf("second CloseSession() error = %v", err)
+	}
+	if second.Status != "closed" {
+		t.Fatalf("second.Status = %q, want closed", second.Status)
+	}
+	if second.SessionID != first.SessionID {
+		t.Fatalf("second.SessionID = %q, want %q", second.SessionID, first.SessionID)
+	}
+
+	if len(closer.modes) != 1 || closer.modes[0] != "promote_and_expire" {
+		t.Fatalf("closer.modes = %v, want [promote_and_expire]", closer.modes)
+	}
+}
