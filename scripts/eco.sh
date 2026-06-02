@@ -126,6 +126,65 @@ run_compose() {
   esac
 }
 
+prune_repo_branches() {
+  local dir="$1"
+  local label="$2"
+  if [ ! -d "$dir/.git" ]; then
+    printf '\n=== %s ===\n  skip (not cloned)\n' "$label"
+    return 0
+  fi
+  printf '\n=== %s ===\n' "$label"
+
+  # Drop stale remote-tracking refs (origin/<branch> whose remote was deleted,
+  # e.g. after a merged PR with delete-branch-on-merge). Tolerate offline.
+  if ! git -C "$dir" fetch --prune origin >/dev/null 2>&1; then
+    echo "  warning: fetch --prune failed (offline?); cleaning local-only"
+    git -C "$dir" remote prune origin >/dev/null 2>&1 || true
+  fi
+
+  # Resolve the default branch (main / master) from origin/HEAD; the merged
+  # check runs against origin/<default> so a branch already merged on the
+  # remote is detected even if the local default has not been pulled.
+  local def merge_target
+  def="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@' || true)"
+  if [ -z "$def" ]; then
+    if git -C "$dir" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+      def="main"
+    elif git -C "$dir" rev-parse --verify --quiet origin/master >/dev/null 2>&1; then
+      def="master"
+    else
+      def="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+    fi
+  fi
+  if git -C "$dir" rev-parse --verify --quiet "origin/$def" >/dev/null 2>&1; then
+    merge_target="origin/$def"
+  else
+    merge_target="$def"
+  fi
+
+  # Delete local branches whose upstream is gone — but only when fully merged
+  # into the default branch (ancestor check), so local-only work is never lost.
+  local deleted=0 kept=0
+  while read -r br track; do
+    [ -n "$br" ] || continue
+    [ "$br" = "$def" ] && continue
+    case "$track" in
+      *gone*)
+        if git -C "$dir" merge-base --is-ancestor "$br" "$merge_target" 2>/dev/null; then
+          git -C "$dir" branch -D "$br" >/dev/null 2>&1 && { echo "  deleted (merged): $br"; deleted=$((deleted + 1)); }
+        else
+          echo "  KEPT (upstream gone but NOT merged into $def — has local-only commits): $br"
+          kept=$((kept + 1))
+        fi
+        ;;
+    esac
+  done < <(git -C "$dir" for-each-ref --format '%(refname:short) %(upstream:track)' refs/heads)
+
+  if [ "$deleted" -eq 0 ] && [ "$kept" -eq 0 ]; then
+    echo "  nothing to prune"
+  fi
+}
+
 command="${1:-help}"
 shift || true
 
@@ -179,6 +238,19 @@ case "$command" in
       run_go_cmd "$repo" 'go build ./... && go vet ./...'
     done <<<"$targets"
     ;;
+  prune-branches)
+    # Clean up local branches whose remote was deleted (e.g. after a merged PR
+    # with delete-branch-on-merge) plus the stale remote-tracking refs they
+    # leave behind. Safe by default: only branches fully merged into the
+    # default branch are removed; branches with local-only commits are KEPT and
+    # reported. Covers the umbrella repo and every cloned subproject.
+    prune_repo_branches "$root_dir" "$(basename "$root_dir") (umbrella)"
+    targets="$(normalize_targets "${1:-all}" all_repos)"
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      prune_repo_branches "$root_dir/$repo" "$repo"
+    done <<<"$targets"
+    ;;
   up|down)
     targets="$(normalize_targets "${1:-all}" launchable_repos)"
     while IFS= read -r repo; do
@@ -199,6 +271,7 @@ ecosystem commands:
   build [all|repo1,repo2]
   test [all|repo1,repo2]
   release-check [all|repo1,repo2]
+  prune-branches [all|repo1,repo2]
   up [all|llm-agent-otel,llm-agent-customer-support]
   down [all|llm-agent-otel,llm-agent-customer-support]
 EOF
