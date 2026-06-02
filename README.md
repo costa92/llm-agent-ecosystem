@@ -232,6 +232,25 @@ make down TARGETS=llm-agent-customer-support
 `make up` starts the launchable subprojects; `TARGETS=` lets you select one or
 more by name. Library-only subprojects still participate in `build` and `test`.
 
+### Adding a subproject
+
+```bash
+make add-subproject NAME=llm-agent-foo [LAUNCHABLE=1]
+```
+
+`scripts/add-subproject.sh` automates the mechanical, uniform parts: it
+`gh repo create`s a public repo, scaffolds `go.mod` + a placeholder package,
+copies the four standard workflows (`test` / `pr-governance` /
+`release-precheck` / `delete-merged-branch`) plus a self-only `umbrella.yml`,
+pushes, applies branch protection (strict, required `go`+`governance`,
+`enforce_admins`), and registers the repo in `go.work`, `.gitignore`,
+`scripts/eco.sh`, and the `depcheck` roster. It is idempotent — re-run it to
+retrofit a repo created before the script existed. The workflow templates live
+in `scripts/templates/workflows/`. It deliberately does **not** edit the
+judgment-driven parts (this README's roster/graph, the umbrella `umbrella.yml`
+cross-build edges, consumer `require`/`replace` wiring) — those are printed as a
+checklist for you to complete by hand.
+
 Suggested workflow for cross-repo changes:
 
 1. Run `make bootstrap` once to clone missing subprojects.
