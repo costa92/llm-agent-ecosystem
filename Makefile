@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 
 TARGETS ?= all
 
-.PHONY: help bootstrap workspace pull status build test up down
+.PHONY: help bootstrap workspace pull status build test prune-branches up down
 
 help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ help:
 		'make status      - show status for each subproject' \
 		'make build       - build every subproject' \
 		'make test        - test every subproject' \
+		'make prune-branches - delete local branches whose remote was deleted (merged only; keeps unmerged)' \
 		'make up          - start launchable subprojects (or TARGETS=...)' \
 		'make down        - stop launchable subprojects (or TARGETS=...)'
 
@@ -32,6 +33,9 @@ build:
 
 test:
 	./scripts/eco.sh test $(TARGETS)
+
+prune-branches:
+	./scripts/eco.sh prune-branches $(TARGETS)
 
 up:
 	./scripts/eco.sh up $(TARGETS)
