@@ -31,6 +31,7 @@ import (
 // repo — every downstream behavior (DAG, topo, table) keys off this.
 var repoList = []string{
 	"llm-agent",
+	"llm-agent-contract",
 	"llm-agent-rag",
 	"llm-agent-otel",
 	"llm-agent-providers",

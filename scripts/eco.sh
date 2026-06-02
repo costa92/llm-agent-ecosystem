@@ -5,6 +5,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 all_repos=(
   llm-agent
+  llm-agent-contract
   llm-agent-rag
   llm-agent-otel
   llm-agent-providers
@@ -26,6 +27,7 @@ launchable_repos=(
 repo_url() {
   case "$1" in
     llm-agent) printf '%s\n' 'https://github.com/costa92/llm-agent.git' ;;
+    llm-agent-contract) printf '%s\n' 'https://github.com/costa92/llm-agent-contract.git' ;;
     llm-agent-rag) printf '%s\n' 'https://github.com/costa92/llm-agent-rag.git' ;;
     llm-agent-otel) printf '%s\n' 'https://github.com/costa92/llm-agent-otel.git' ;;
     llm-agent-providers) printf '%s\n' 'https://github.com/costa92/llm-agent-providers.git' ;;

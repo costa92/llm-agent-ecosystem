@@ -18,7 +18,8 @@ absorbs subproject source trees.
 
 ```
 llm-agent-ecosystem/
-├── llm-agent/                       # core framework — stdlib-only, zero-dep
+├── llm-agent/                       # core framework — stdlib-only (one contract dep)
+├── llm-agent-contract/              # stdlib-only LLM-provider contract (ChatModel + capabilities)
 ├── llm-agent-rag/                   # standalone RAG SDK (frozen v1.x public API)
 ├── llm-agent-otel/                  # capability-preserving OpenTelemetry wrappers
 ├── llm-agent-providers/             # OpenAI / Anthropic / Ollama / DeepSeek / MiniMax adapters
@@ -37,6 +38,7 @@ llm-agent-ecosystem/
 | Subproject | Role | Current tag | Default branch | Upstream |
 |---|---|---|---|---|
 | `llm-agent` | core framework, agent paradigms, memory, `llm/v2` | **v0.7.0** | `main` | <https://github.com/costa92/llm-agent> |
+| `llm-agent-contract` | stdlib-only LLM-provider contract — `ChatModel`, capability interfaces, streaming, mocks | **unreleased** | `main` | <https://github.com/costa92/llm-agent-contract> |
 | `llm-agent-rag` | standalone RAG SDK — import, retrieval, generation, GraphRAG | **v1.9.0** | `master` | <https://github.com/costa92/llm-agent-rag> |
 | `llm-agent-otel` | OpenTelemetry decorator wrappers for `ChatModel` / `RAGSystem` / `flow.Runner` | **v0.3.0** | `main` | <https://github.com/costa92/llm-agent-otel> |
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.5** | `main` | <https://github.com/costa92/llm-agent-providers> |
@@ -138,19 +140,27 @@ freeze; only patch releases (v1.9.x) will land against the v1 line.
 ## Dependency direction
 
 ```
-llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-otel + llm-agent-providers + llm-agent-flow + llm-agent-rag
-llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag + llm-agent-flow
-llm-agent-providers         ──depends on──▶  llm-agent
-llm-agent-flow              ──depends on──▶  llm-agent
+llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-contract + llm-agent-otel + llm-agent-providers + llm-agent-flow + llm-agent-rag
+llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-contract + llm-agent-rag + llm-agent-flow
+llm-agent-providers         ──depends on──▶  llm-agent + llm-agent-contract
+llm-agent-flow              ──depends on──▶  llm-agent (+ llm-agent-contract, indirect)
 llm-agent-memory            ──depends on──▶  llm-agent (SDK-only durable abstractions; no other sibling edges)
 llm-agent-memory-contract   ──depends on──▶  (nothing — stdlib only, backend-neutral durable contract)
 llm-agent-memory-postgres   ──depends on──▶  llm-agent-memory-contract
 llm-agent-memory-gateway    ──depends on──▶  llm-agent-memory-contract + llm-agent-memory-postgres + llm-agent-rag
 llm-agent-memory-worker     ──depends on──▶  llm-agent-memory-contract + llm-agent-memory-postgres
 llm-agent-memory-client     ──depends on──▶  (nothing — stdlib-only HTTP client for the gateway)
-llm-agent                   ──depends on──▶  (nothing — stdlib only, zero third-party requires)
-llm-agent-rag               ──depends on──▶  (stdlib only at v1.0.0; `postgres` subpackage may pull pgx)
+llm-agent                   ──depends on──▶  llm-agent-contract (the LLM-provider contract — its only require; itself stdlib-only)
+llm-agent-contract          ──depends on──▶  (nothing — stdlib only, capability-aware LLM-provider contract)
+llm-agent-rag               ──depends on──▶  llm-agent-contract (stdlib only otherwise; `postgres` subpackage may pull pgx)
 ```
+
+> **Migration in progress.** The `llm-agent-contract` extraction is wired locally
+> via `go.work` + a `replace … => ../llm-agent-contract` (`v0.0.0` placeholder) in
+> each consumer; the consumer mains do not yet carry the dependency. Completing it
+> is a lockstep follow-up: **tag `llm-agent-contract` v0.x.0 → bump each consumer's
+> `require` and drop the `replace` → push** (the `INFRA-04` gate rejects `replace`
+> on tagged-release branches).
 
 `llm-agent-rag` is the **fixed point** every other repo aligns *to* — its
 v1.x public API is additive-only; breaking changes go to a `/v2` module path.
@@ -161,11 +171,14 @@ longer ships a facade re-export (P0-2 decision, 2026-05-21).
 
 These are enforced by CI gates across every repo. They are non-negotiable.
 
-1. **Core `llm-agent` stays stdlib-only.** Zero third-party deps:
-   `go.mod` carries no `require` block, `go.sum` is empty. The previous
-   `llm-agent-rag` back-edge exception was removed in P0-2 (2026-05-21)
-   because the facade was an empty directory in practice; the B4 gate
-   (`scripts/stdlib-only-check.sh`) now asserts zero direct requires.
+1. **Core `llm-agent` stays stdlib-only.** Zero *third-party* deps. The only
+   permitted `require` is `github.com/costa92/llm-agent-contract` — the
+   LLM-provider contract, which is itself stdlib-only, so "core + contract"
+   remains a stdlib-only closure. The previous `llm-agent-rag` back-edge
+   exception was removed in P0-2 (2026-05-21) because the facade was an empty
+   directory in practice. The B4 gate (`scripts/stdlib-only-check.sh`) asserts
+   no direct requires *other than* the contract, and that the transitive dep
+   set is stdlib + `llm-agent` + `llm-agent-contract` only.
 2. **No `replace` directives in tagged-release branches.** `replace` is a
    local-dev escape hatch only. The `INFRA-04` CI gate refuses to tag a
    commit whose `go.mod` carries a `replace`.
