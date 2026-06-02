@@ -2,6 +2,7 @@ go 1.26.0
 
 use (
 	./llm-agent
+	./llm-agent-contract
 	./llm-agent-customer-support
 	./llm-agent-flow
 	./llm-agent-memory-contract

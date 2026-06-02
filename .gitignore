@@ -2,6 +2,7 @@
 /.codex/
 /.context/
 /llm-agent/
+/llm-agent-contract/
 /llm-agent-rag/
 /llm-agent-otel/
 /llm-agent-providers/
