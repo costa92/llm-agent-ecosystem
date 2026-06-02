@@ -117,7 +117,7 @@ Two PRs (worker, gateway), each bumping contract to `v0.2.0` first.
 - **Lockstep tags:** contract `v0.2.0` → worker bump+tag → gateway bump (then gateway steps 3–7) → gateway final tag. Never reference an unpublished tag.
 - **Rollback:** step 1 additive (safe). Step 2 code-level (revert + re-pin). Step 5 is the riskiest (API semantic) — gate behind review; rollback = revert the mutator fence (no DDL). Step 6 wiring revert = restore `noOpSessionCloser{}`.
 - **Execution discipline:** one implementer/PR at a time; review between steps; `git stash -u` untracked siblings; delete any out-of-scope generated code. (Per established polyrepo discipline.)
-- **Follow-ups:** D6 orphaned-session reaper (idle sweep) — **DONE** (gateway v0.3.0, PR #11: `SessionReaperCron` + `buildIdleSessionsQuery` over working records + `Service.ReapIdleSession`, default-on). Remaining: hard-delete GC of expired working rows (still a future item).
+- **Follow-ups — both DONE:** D6 orphaned-session reaper (gateway v0.3.0, PR #11: `SessionReaperCron` + `buildIdleSessionsQuery` over working records + `Service.ReapIdleSession`, default-on). Hard-delete GC of soft-deleted rows (gateway v0.4.0, PR #13: `HardDeleteGCCron` + `buildPurgeSoftDeleted`, default-off, configurable retention). Also closed a deployment gap: the C1 fix was untagged and consumers pinned the buggy postgres v0.1.0 → tagged postgres v0.1.1 and bumped worker (v0.2.1) + gateway (v0.3.1). No remaining items.
 
 ## 5. Acceptance (rolls up design §8)
 
