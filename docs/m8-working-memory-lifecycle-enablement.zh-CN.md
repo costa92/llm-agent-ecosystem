@@ -195,7 +195,7 @@
 | **D1** 默认 mode | **`expire_working`**（不改） | 无 |
 | **D2** 会话关闭晋升可观测 | **补**（加 `Promoted` + `working_promoted_total` + 改 `closer:79` 触发条件） | gateway，小 |
 | **D3** 防分叉 | **下沉到 contract 单一事实源**（`PromotionPolicy` + dedupe-key 构造） | **contract（新增）+ worker + gateway 消费，3 仓 lockstep，契约版本 bump** |
-| **D4** 过期删除 | **软删**（硬删 GC 留独立运维项） | 无 |
+| **D4** 过期删除 | **软删** + ✅ **硬删 GC 已实现**（gateway v0.4.0，默认关） | gateway 后台 cron，小 |
 | **D5** 部分失败恢复 | **文档化恢复路径 + 补失败路径 trace/测试** | gateway，小 |
 | **D6** 孤儿会话 | ✅ **已实现**（reaper，gateway v0.3.0；初版曾划出，后补做） | gateway 后台 cron，中 |
 | **D7** 标签 | **按 `tenant_bucket` 分桶 + 统一空值规则** | gateway，小 |
@@ -206,7 +206,7 @@
 - **D1 默认 mode 是否改？** 现默认 `expire_working`（会话临时记忆默认不外溢）。考虑到 worker 已即时晋升高价值记忆，会话关闭再默认只过期是自洽的。**建议保持 `expire_working`**，固化交给 worker + 显式 `promote_and_expire`。
 - **D2 是否补「会话关闭晋升数」可观测？** §5.3 缺口。**建议补**：①加 `Promoted int` + `working_promoted_total`（会话关闭路径）②同时改 `closer:79` 触发条件，否则 promote-only 关闭整条 observation 为空。属可选第 4 步。
 - **D3 晋升窄契约面如何防分叉？**（round-1 H2 重新界定）真正必须锁步的只有三样：**dedupe-key 构造 + 0.7 阈值 + source→合格映射**（**不是**整份函数，幂等键盐值/`Reason` 本就该不同）。其中 **dedupe-key 分叉最危险**（两路径判到不同 winner）。**待评审**：是否把这三样下沉到 `llm-agent-memory-contract` 做单一事实源（契约层提供 `PromotionPolicy` + dedupe-key 构造函数），还是接受双份 + 加跨仓一致性测试（类似 umbrella 的 regex-parity gate）。下沉涉契约版本，需 M8 总纲 §4.7 lockstep 评估。
-- **D4 过期是软删还是别的？** 现实现 `DeleteRecord`→`deleted=TRUE`（软删）。软删后记录仍占行、不释放（与 D6 叠加：孤儿会话连软删都没有）。working 记忆是否需要后续硬删 GC？M8 总纲未覆盖。**建议**本轮维持软删，硬删 GC 留作独立运维议题。
+- **D4 过期是软删还是别的？** 现实现 `DeleteRecord`→`deleted=TRUE`（软删）。**硬删 GC ✅ 已实现**（gateway v0.4.0，PR #13）：`HardDeleteGCCron` 物理删除 `deleted=TRUE AND deleted_at < now-retention` 的行（`memory_event`/outbox 无 FK，保留为历史），全局计数器 `memory_hard_deleted_total`。**默认关闭**（不可逆物理删除，operator 显式开），保留期默认 30d、间隔默认 1h，均可配。软删保持行为终态、硬删回收存储——分层清晰。
 - **D5 会话关闭部分失败的恢复语义。** `CloseSession` 先调 closer 再 `sessionRegistry.Close`（`service.go:636-641`）；closer 中途失败则会话留在 `active`，重试重跑 `ListSessionWorking`（记录更少）并重新晋升/过期。幂等键 + stale 容忍（`closer:102,120,135`）保证**无重复晋升/重复计数**。但 round-1 M4 补充两点须在实现计划写明并测试：①**半回收的 active 会话窗口**——失败到重试之间，部分记录已软删/晋升，客户端仍可向这个半清理会话读写；②**失败路径无 trace**——`promote_decided` 只在 closer + registry.Close **都成功**后才发（`service.go:646`），失败路径可观测盲区，需补失败计数/日志。
 - **D6（round-1 H1）孤儿会话回收。✅ 已实现**（gateway v0.3.0，PR #11）。初版评审时显式划出（先落地主路径），随后补做。实现：`SessionReaperCron`（后台 cron）+ `buildIdleSessionsQuery`（按 `now-SessionIdleTTL` 扫描 working 记录的 `max(created_at,updated_at,last_access_at)`，**不读 session-state**——关键发现：session-state 仅由 heartbeat/close 端点写入，从不 heartbeat 的会话在 session-state 里不存在，正是主泄漏）+ `Service.ReapIdleSession`（`expire_working` 收口，复用 CloseSession 幂等）。配置 `SessionReaperEnabled`（默认开）/`SessionReaperInterval`（默认 5m）。**故 §1 边界 1 已消除**：显式关闭 + 孤儿回收双管，working 记录不再永久泄漏。
 - **D7（round-1 M3 + round-2 C3）生命周期计数器的标签策略。** 见 §5.2：此前「全局无 label」与代码库惯例不一致（所有数据面计数器 + worker 的 `working_promoted_total` 都带 `tenant_bucket`，observation 已携带 `TenantID`）。**建议改为按 `tenant_bucket` 分桶**与全栈对齐。**额外（C3）**：空租户分桶规则两仓不一致——gateway `tenantBucket("")=="unknown"`（`tenant_bucket.go:21`），worker `TenantBucket("")=="00"`（worker `metrics.go:102`）；非空租户两仓一致（同 fnv32a %32）。若分桶，须**统一空值规则**（建议 gateway 复用既有 `service.TenantBucket`，并在设计里声明这些路径 `tenant_id` 不应为空——authz 已要求 tenant，空值仅理论边界）。**待评审拍板**（推翻先前决策，需明确确认）。
@@ -237,7 +237,7 @@
 - **不建议**：把步骤 1-7 当「轻量计划」一把梭——D8 改写 API 语义、D3 动契约版本，任一出错都是跨仓回滚。
 - **两轮评审 ✅ + D1–D8 已拍板 ✅ + 步骤 0 已落地 ✅**（postgres PR #2 merged）。**实现计划已成文**：[`superpowers/plans/2026-06-02-m8-working-memory-lifecycle-implementation.md`](./superpowers/plans/2026-06-02-m8-working-memory-lifecycle-implementation.md)（步骤 1-7 的 per-step 文件/测试/lockstep tag 序列）。步骤 1-7 待执行（4 仓 lockstep，建议逐步评审、一次一个 PR）。
 - 若评审中 D3 决定下沉到契约层，则范围扩大到 contract + postgres + worker + gateway 四仓 lockstep，届时再评估是否值得正式排期。
-- ~~若 D6 决定本轮纳入 idle-session 清扫器…~~ **D6 已实现**（gateway v0.3.0，PR #11），见 §7 D6。剩余仅 D4 尾巴（working 软删后的硬删 GC，留作独立运维项）。
+- **D6 已实现**（gateway v0.3.0，PR #11）+ **D4 硬删 GC 也已实现**（gateway v0.4.0，PR #13，默认关）。**M8 working-memory 生命周期 D1–D8 全部落地**，无剩余待办。
 
 ---
 
