@@ -10,7 +10,7 @@
 
 **working-memory 生命周期的「晋升」一半已经在生产里跑（M8b worker）；缺的是「过期回收」一半——working 记录目前在生产中永不清理。** 把已经写好、测试齐全但未接线的 `DurableSessionCloser` 接进生产，就补齐了这一半的**主路径**。它的工作量是**激活已有机器**（一个适配器 + 一行接线 + 一个 metrics observer 实现），不是从零设计。CAP2 那对生命周期指标（`working_expired_total` / `working_dropped_before_use_total`）之所以现在是「死指标」，正因为它们度量的就是这个尚未接线的回收器。
 
-> ⚠️ **边界 1（round-1 H1）孤儿会话不回收**：接线 `DurableSessionCloser` 只回收**被显式 `POST /sessions/{id}/close` 关闭**的会话。**从不显式关闭的会话（客户端崩溃/放弃/never-close）其 working 记录仍永久累积**——`SessionIdleTTL` 只用于**拒绝**对 idle 会话的访问（`service.go:820-848`），不触发关闭，全代码无任何 idle-session 清扫器。见 §7 D6。
+> ✅ **边界 1（round-1 H1）→ D6 已实现**：从不显式 `/close` 的会话曾会永久累积 working 记录（`SessionIdleTTL` 只用于**拒绝**访问、不触发关闭）。现已加 **orphaned-session reaper**（`SessionReaperCron` + `Service.ReapIdleSession`，gateway v0.3.0）：后台 cron 按 `now-SessionIdleTTL` 扫描**working 记录**（非 session-state——active 会话不写 session-state），对 idle 会话调 `expire_working` 收口。默认开启（`SESSION_REAPER_ENABLED`）。见 §7 D6。
 >
 > ✅ **边界 2（round-2 C2）→ D8 已决定加写栅栏修复**：现状 `validateSessionState` 只在 `RecallUnified`（`service.go:121`）和 `HeartbeatSession`（`678`）调用，`WriteMemory`/`PatchMemory`/`PinMemory`/`DeleteMemory`（`261/307/392/569`）**不检查会话状态**，故关闭后写入仍会新建 working 记录。**D8 拍板加栅栏**（步骤 5：closed→拒绝），使「关闭」成为写入终态。注意这是**写 API 语义变更**（见 §6 步骤 5、§7 D8）。
 >
@@ -197,7 +197,7 @@
 | **D3** 防分叉 | **下沉到 contract 单一事实源**（`PromotionPolicy` + dedupe-key 构造） | **contract（新增）+ worker + gateway 消费，3 仓 lockstep，契约版本 bump** |
 | **D4** 过期删除 | **软删**（硬删 GC 留独立运维项） | 无 |
 | **D5** 部分失败恢复 | **文档化恢复路径 + 补失败路径 trace/测试** | gateway，小 |
-| **D6** 孤儿会话 | **本轮显式划出**（不做 idle-reaper） | 无（§1 边界 1 保留） |
+| **D6** 孤儿会话 | ✅ **已实现**（reaper，gateway v0.3.0；初版曾划出，后补做） | gateway 后台 cron，中 |
 | **D7** 标签 | **按 `tenant_bucket` 分桶 + 统一空值规则** | gateway，小 |
 | **D8** 写栅栏 | **加**（`WriteMemory` 等 closed→拒绝） | **gateway mutator + 写 API 语义变更（静默成功→4xx）+ api-contract 文档** |
 
@@ -208,7 +208,7 @@
 - **D3 晋升窄契约面如何防分叉？**（round-1 H2 重新界定）真正必须锁步的只有三样：**dedupe-key 构造 + 0.7 阈值 + source→合格映射**（**不是**整份函数，幂等键盐值/`Reason` 本就该不同）。其中 **dedupe-key 分叉最危险**（两路径判到不同 winner）。**待评审**：是否把这三样下沉到 `llm-agent-memory-contract` 做单一事实源（契约层提供 `PromotionPolicy` + dedupe-key 构造函数），还是接受双份 + 加跨仓一致性测试（类似 umbrella 的 regex-parity gate）。下沉涉契约版本，需 M8 总纲 §4.7 lockstep 评估。
 - **D4 过期是软删还是别的？** 现实现 `DeleteRecord`→`deleted=TRUE`（软删）。软删后记录仍占行、不释放（与 D6 叠加：孤儿会话连软删都没有）。working 记忆是否需要后续硬删 GC？M8 总纲未覆盖。**建议**本轮维持软删，硬删 GC 留作独立运维议题。
 - **D5 会话关闭部分失败的恢复语义。** `CloseSession` 先调 closer 再 `sessionRegistry.Close`（`service.go:636-641`）；closer 中途失败则会话留在 `active`，重试重跑 `ListSessionWorking`（记录更少）并重新晋升/过期。幂等键 + stale 容忍（`closer:102,120,135`）保证**无重复晋升/重复计数**。但 round-1 M4 补充两点须在实现计划写明并测试：①**半回收的 active 会话窗口**——失败到重试之间，部分记录已软删/晋升，客户端仍可向这个半清理会话读写；②**失败路径无 trace**——`promote_decided` 只在 closer + registry.Close **都成功**后才发（`service.go:646`），失败路径可观测盲区，需补失败计数/日志。
-- **D6（round-1 H1，新增）孤儿会话回收。** 见 §1 边界：从不显式 `/close` 的会话其 working 记录永不回收，`SessionIdleTTL` 不触发关闭。**这是本工作之外、但与「关闭泄漏」直接相关的缺口**。**待评审**：本轮是否纳入一个 idle-session 清扫器（cron 扫 idle 会话 → 调 closer），还是显式划出范围、留作独立后续项。**建议**本轮显式划出（先把主路径接线 + 可观测落地），D6 单列后续，避免范围蔓延；但 §8 验收**不得**宣称「彻底关闭泄漏」。
+- **D6（round-1 H1）孤儿会话回收。✅ 已实现**（gateway v0.3.0，PR #11）。初版评审时显式划出（先落地主路径），随后补做。实现：`SessionReaperCron`（后台 cron）+ `buildIdleSessionsQuery`（按 `now-SessionIdleTTL` 扫描 working 记录的 `max(created_at,updated_at,last_access_at)`，**不读 session-state**——关键发现：session-state 仅由 heartbeat/close 端点写入，从不 heartbeat 的会话在 session-state 里不存在，正是主泄漏）+ `Service.ReapIdleSession`（`expire_working` 收口，复用 CloseSession 幂等）。配置 `SessionReaperEnabled`（默认开）/`SessionReaperInterval`（默认 5m）。**故 §1 边界 1 已消除**：显式关闭 + 孤儿回收双管，working 记录不再永久泄漏。
 - **D7（round-1 M3 + round-2 C3）生命周期计数器的标签策略。** 见 §5.2：此前「全局无 label」与代码库惯例不一致（所有数据面计数器 + worker 的 `working_promoted_total` 都带 `tenant_bucket`，observation 已携带 `TenantID`）。**建议改为按 `tenant_bucket` 分桶**与全栈对齐。**额外（C3）**：空租户分桶规则两仓不一致——gateway `tenantBucket("")=="unknown"`（`tenant_bucket.go:21`），worker `TenantBucket("")=="00"`（worker `metrics.go:102`）；非空租户两仓一致（同 fnv32a %32）。若分桶，须**统一空值规则**（建议 gateway 复用既有 `service.TenantBucket`，并在设计里声明这些路径 `tenant_id` 不应为空——authz 已要求 tenant，空值仅理论边界）。**待评审拍板**（推翻先前决策，需明确确认）。
 - **D8（round-2 C2，新增）close 是否应栅栏后续写入？** 见 §1 边界 2。**待评审**：是否在 `WriteMemory` 等 mutator 加 `validateSessionState`（closed→拒绝），使「关闭」成为写入终态、回收可靠。**权衡**：加栅栏会改变写 API 语义（closed session 写入从「静默成功」变 4xx），可能影响现有客户端契约（见 `memory-gateway-api-contract`），且需考虑「关闭后合法的迟到写入」是否存在。**建议**：本轮**至少**在 §8 验收里明确「关闭后写入」的既有行为（写测试固化现状），是否加栅栏作为 D8 单独拍板——若不加，§1 的保守措辞必须保留。
 
@@ -216,7 +216,7 @@
 
 ## 8. 验收标准
 
-1. 生产 `cmd/memory-gateway` 二进制中，**显式 `/close`** 的会话其 `CloseSession` 真正执行过期/晋升（不再是 no-op）；集成测试覆盖 `expire_working` 与 `promote_and_expire` 两条 mode。**孤儿会话回收不在本轮验收内**（D6，显式划出）——验收**不得**宣称「彻底关闭泄漏」，只声明「关闭显式 `/close` 路径的泄漏」。
+1. 生产 `cmd/memory-gateway` 二进制中，**显式 `/close`** 的会话其 `CloseSession` 真正执行过期/晋升（不再是 no-op）；集成测试覆盖 `expire_working` 与 `promote_and_expire` 两条 mode。**孤儿会话回收（D6）已实现**（reaper，gateway v0.3.0）——显式 `/close` + 后台 reaper 双管，working 记录不再永久泄漏。
 2. `working_expired_total` / `working_dropped_before_use_total` 在 `/metrics` 暴露，且在有 working 记录被回收时非零（端到端验证「死指标转活」）；标签按 D7 结论实现。
 3. 已晋升记录不被会话关闭二次晋升（幂等性测试）；worker 与会话关闭器对同一记录无冲突（含 TOCTOU：worker 在 closer list 与 promote 之间晋升 → `ExpectedVersion` 栅栏吞掉）。
 3b. **（步骤 0 前置）`ResolveDedupe` 并发回归**：两个并发调用、相同 `dedupe_key`、空 dedupe 表 → 一方成为 winner、另一方走 collision 分支返回，**无 unique-violation 报错冒泡**（round-2 C1）。
@@ -237,7 +237,7 @@
 - **不建议**：把步骤 1-7 当「轻量计划」一把梭——D8 改写 API 语义、D3 动契约版本，任一出错都是跨仓回滚。
 - **两轮评审 ✅ + D1–D8 已拍板 ✅ + 步骤 0 已落地 ✅**（postgres PR #2 merged）。**实现计划已成文**：[`superpowers/plans/2026-06-02-m8-working-memory-lifecycle-implementation.md`](./superpowers/plans/2026-06-02-m8-working-memory-lifecycle-implementation.md)（步骤 1-7 的 per-step 文件/测试/lockstep tag 序列）。步骤 1-7 待执行（4 仓 lockstep，建议逐步评审、一次一个 PR）。
 - 若评审中 D3 决定下沉到契约层，则范围扩大到 contract + postgres + worker + gateway 四仓 lockstep，届时再评估是否值得正式排期。
-- 若 D6 决定本轮纳入 idle-session 清扫器，则工作从「单仓激活」升级为「含后台清扫的子特性」，规模与排期需重估。
+- ~~若 D6 决定本轮纳入 idle-session 清扫器…~~ **D6 已实现**（gateway v0.3.0，PR #11），见 §7 D6。剩余仅 D4 尾巴（working 软删后的硬删 GC，留作独立运维项）。
 
 ---
 
