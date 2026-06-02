@@ -142,9 +142,12 @@ llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-ote
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-rag + llm-agent-flow
 llm-agent-providers         ──depends on──▶  llm-agent
 llm-agent-flow              ──depends on──▶  llm-agent
-llm-agent-memory            ──depends on──▶  (SDK-only durable abstractions; no sibling back-edges)
-llm-agent-memory-postgres   ──depends on──▶  llm-agent-memory
-llm-agent-memory-gateway    ──depends on──▶  llm-agent-memory + llm-agent-memory-postgres + llm-agent-rag
+llm-agent-memory            ──depends on──▶  llm-agent (SDK-only durable abstractions; no other sibling edges)
+llm-agent-memory-contract   ──depends on──▶  (nothing — stdlib only, backend-neutral durable contract)
+llm-agent-memory-postgres   ──depends on──▶  llm-agent-memory-contract
+llm-agent-memory-gateway    ──depends on──▶  llm-agent-memory-contract + llm-agent-memory-postgres + llm-agent-rag
+llm-agent-memory-worker     ──depends on──▶  llm-agent-memory-contract + llm-agent-memory-postgres
+llm-agent-memory-client     ──depends on──▶  (nothing — stdlib-only HTTP client for the gateway)
 llm-agent                   ──depends on──▶  (nothing — stdlib only, zero third-party requires)
 llm-agent-rag               ──depends on──▶  (stdlib only at v1.0.0; `postgres` subpackage may pull pgx)
 ```
