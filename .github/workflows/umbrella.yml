@@ -321,3 +321,28 @@ jobs:
 
       - name: Run regex parity gate
         run: bash scripts/regex-parity-check.sh
+
+  promotion-policy-parity-gate:
+    name: B6 — promotion policy parity (worker <-> gateway)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout umbrella root
+        uses: actions/checkout@v4
+
+      - name: Checkout llm-agent-memory-worker
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-memory-worker
+          ref: main
+          path: llm-agent-memory-worker
+
+      - name: Checkout llm-agent-memory-gateway
+        uses: actions/checkout@v4
+        with:
+          repository: costa92/llm-agent-memory-gateway
+          ref: main
+          path: llm-agent-memory-gateway
+
+      - name: Run promotion policy parity gate
+        run: bash scripts/promotion-policy-parity-check.sh
