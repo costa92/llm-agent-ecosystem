@@ -702,6 +702,8 @@ Memory recall 的越权风险高于普通 CRUD，因为：
 - 已关闭会话必须返回 `403 forbidden`，不能被 heartbeat 重新打开
 - 超过 session idle TTL 的会话必须视为过期；默认值可取 `30m`
 - 对已过期会话的 recall / heartbeat 必须返回 `403`
+- **会话关闭是写入终态（D8）**：对已关闭/已过期会话的**所有写操作**——`write` / `patch` / `pin` / `disable` / `delete`——必须返回 `403 forbidden`（`session is closed`），与 recall / heartbeat 一致。这保证关闭后不会再向该会话写入、产生新的 working 记录绕过回收。**不带 `session_id` 的写入不受影响**（无注册会话即放行）。
+  - ⚠️ **语义变更**：此前对已关闭会话的写入是静默成功，自 D8 起改为 `403`。调用方若在关闭后仍需写入，应开新会话。
 
 第一版若不想暴露 API，也至少应在调用协议或 SDK 里有等价语义。
 
