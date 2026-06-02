@@ -3,21 +3,24 @@
 #
 # Three assertions, fail-fast:
 #
-#   1. llm-agent/go.mod direct `require` block contains ZERO entries.
-#      The core module has no third-party runtime deps — not even the
-#      ecosystem siblings. Any forward edge to llm-agent-rag (or anything
-#      else) is a regression of P0-2 (the "RAG facade 名实不副" decision)
-#      and exits non-zero.
+#   1. llm-agent/go.mod direct `require` block contains NO entries OTHER
+#      than github.com/costa92/llm-agent-contract — the LLM-provider
+#      contract, itself stdlib-only, so "core + contract" stays a
+#      stdlib-only closure. Any OTHER require (e.g. a llm-agent-rag
+#      back-edge — the "RAG facade 名实不副" decision, P0-2) is a
+#      regression and exits non-zero.
 #
 #   2. The full transitive dep set of llm-agent/... (via `go list -deps`)
 #      contains ONLY:
 #        - stdlib packages (no dot in path, or vendor/ stdlib alias)
 #        - github.com/costa92/llm-agent and its subpackages (self)
+#        - github.com/costa92/llm-agent-contract and its subpackages
 #      Anything else is a leak and exits non-zero.
 #
 #   3. The stdlib-clean sub-packages (policy/, budget/, agentstest/) must
-#      have ZERO external deps — the rule mirrors Assertion 2 for these
-#      sub-packages individually so they cannot regress independently.
+#      have ZERO external deps beyond the contract — the rule mirrors
+#      Assertion 2 for these sub-packages individually so they cannot
+#      regress independently (policy/ + agentstest/ use the contract mocks).
 #
 # Resolution:
 #   ECOSYSTEM_ROOT defaults to this script's parent directory's parent
@@ -76,13 +79,18 @@ DIRECT=$(awk '
   }
 ' "$GOMOD")
 
-DIRECT_COUNT=$(printf '%s\n' "$DIRECT" | grep -c '^[^[:space:]]' || true)
-echo "  direct require count: $DIRECT_COUNT"
+# The LLM-provider contract (github.com/costa92/llm-agent-contract) is the
+# ONE permitted in-ecosystem require: it is itself stdlib-only, so
+# "core + contract" stays a stdlib-only closure. Exclude it before counting;
+# any OTHER direct require is a third-party leak (P0-2: no RAG back-edge).
+DISALLOWED=$(printf '%s\n' "$DIRECT" | grep -vE '^github\.com/costa92/llm-agent-contract($| )' || true)
+DIRECT_COUNT=$(printf '%s\n' "$DISALLOWED" | grep -c '^[^[:space:]]' || true)
+echo "  direct require count (excluding llm-agent-contract): $DIRECT_COUNT"
 echo "  direct require lines:"
 printf '%s\n' "$DIRECT" | sed 's/^/    /'
 
 if [ "$DIRECT_COUNT" -ne 0 ]; then
-  echo "::error::expected ZERO direct requires in core go.mod (P0-2: no RAG back-edge), got $DIRECT_COUNT"
+  echo "::error::expected NO direct requires other than llm-agent-contract in core go.mod (P0-2: no RAG back-edge), got $DIRECT_COUNT extra"
   fail=1
 fi
 
@@ -93,8 +101,8 @@ echo "[2/3] checking transitive deps of llm-agent/... via go list -deps..."
 #   - stdlib vendoring: `vendor/golang.org/x/...` and similar `vendor/...`
 #   - stdlib internals like `crypto/internal/entropy/v1.0.0`
 #   - in-ecosystem: github.com/costa92/llm-agent($|/) and
-#     github.com/costa92/llm-agent-rag($|/)
-#   - golang.org/x/... (rag-transitive)
+#     github.com/costa92/llm-agent-contract($|/) — the stdlib-only LLM
+#     contract is the ONE permitted sibling; NO llm-agent-rag back-edge.
 DEPS_ALL=$(cd "$CORE_DIR" && GOWORK=off go list -deps ./...) || {
   echo "::error::go list -deps failed in $CORE_DIR (see above)"
   exit 2
@@ -110,8 +118,11 @@ LEAKS=$(printf '%s\n' "$DEPS_ALL" | awk '
     if (p ~ /^vendor\//) next
     # crypto/internal pseudo-versioned (e.g. crypto/internal/entropy/v1.0.0)
     if (p ~ /^crypto\/internal\//) next
-    # in-ecosystem self only — no sibling allowance after P0-2
+    # in-ecosystem self
     if (p == "github.com/costa92/llm-agent" || p ~ /^github\.com\/costa92\/llm-agent\//) next
+    # the LLM-provider contract is the ONE permitted sibling (stdlib-only
+    # leaf — "core + contract" stays a stdlib-only closure). No rag back-edge.
+    if (p == "github.com/costa92/llm-agent-contract" || p ~ /^github\.com\/costa92\/llm-agent-contract\//) next
     print p
   }
 ')
@@ -144,6 +155,9 @@ for sub in policy budget agentstest; do
       if (p ~ /^crypto\/internal\//) next
       # self-module subpackages are fine
       if (p == "github.com/costa92/llm-agent" || p ~ /^github\.com\/costa92\/llm-agent\//) next
+      # the LLM-provider contract is allowed (policy/ + agentstest/ use it —
+      # e.g. ScriptedLLM mocks; it is a stdlib-only leaf).
+      if (p == "github.com/costa92/llm-agent-contract" || p ~ /^github\.com\/costa92\/llm-agent-contract\//) next
       # NOTE: NO allowance for llm-agent-rag here — these subs must
       # NOT pull the back-edge. That is the entire point of the gate.
       print p
