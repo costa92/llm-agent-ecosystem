@@ -84,6 +84,13 @@ if ! git -C "$repo_dir" rev-parse --abbrev-ref HEAD >/dev/null 2>&1 \
   git -C "$repo_dir" checkout -b main 2>/dev/null || git -C "$repo_dir" switch -c main 2>/dev/null || true
 fi
 
+# Install the replace-guard pre-commit hook (git hooks aren't distributed by
+# git, so every new repo needs it installed locally).
+if [ -f "$root_dir/scripts/install-git-hooks.sh" ]; then
+  note "installing replace-guard pre-commit hook"
+  bash "$root_dir/scripts/install-git-hooks.sh" "$repo_dir" >/dev/null 2>&1 || true
+fi
+
 # Scaffold go.mod + a placeholder package so `go build/vet/test ./...` is green.
 if [ ! -f "$repo_dir/go.mod" ]; then
   note "scaffolding go.mod"
