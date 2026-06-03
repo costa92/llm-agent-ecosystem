@@ -2,11 +2,12 @@ SHELL := /usr/bin/env bash
 
 TARGETS ?= all
 
-.PHONY: help bootstrap workspace pull status build test prune-branches add-subproject up down
+.PHONY: help bootstrap install-hooks workspace pull status build test prune-branches add-subproject up down
 
 help:
 	@printf '%s\n' \
-		'make bootstrap   - clone missing subprojects into this workspace' \
+		'make bootstrap   - clone missing subprojects into this workspace (+ install git hooks)' \
+		'make install-hooks - (re)install the replace-guard pre-commit hook into every repo' \
 		'make workspace   - write go.work for local cross-repo development' \
 		'make pull        - update all cloned subprojects' \
 		'make status      - show status for each subproject' \
@@ -19,6 +20,10 @@ help:
 
 bootstrap:
 	./scripts/eco.sh bootstrap $(TARGETS)
+	./scripts/install-git-hooks.sh
+
+install-hooks:
+	./scripts/install-git-hooks.sh
 
 workspace:
 	./scripts/workspace.sh
