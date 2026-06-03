@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# pre-commit: auto-finalize local `replace` directives for costa92 siblings.
+#
+# If any go.mod in this repo replaces a github.com/costa92/* module with a
+# LOCAL path (e.g. `github.com/costa92/llm-agent => ../llm-agent`), this hook:
+#   1. drops the replace,
+#   2. pins that module to its latest published tag (go get <path>@latest,
+#      which respects /vN major-version module paths),
+#   3. runs `go mod tidy`,
+#   4. smoke-builds (`go build ./...`),
+#   5. re-stages go.mod (+ go.sum) so the commit lands the tagged, replace-free
+#      state that the release-precheck CI gate requires.
+#
+# If the pinned state fails to resolve or build, the go.mod is reverted and the
+# commit is ABORTED (a broken auto-fix is never committed).
+#
+# Bypass (keep local replaces for in-progress local dev): git commit --no-verify
+#
+# Only github.com/costa92/* replaces pointing at a filesystem path are touched;
+# version-pinned replaces and non-costa92 replaces are left alone.
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+export GOWORK=off   # never let a local go.work mask the replace resolution
+
+if ! command -v go >/dev/null 2>&1; then exit 0; fi
+PY=$(command -v python3 || command -v python || true)
+if [ -z "$PY" ]; then
+  echo "pre-commit[replace-guard]: python3 not found — skipping replace check" >&2
+  exit 0
+fi
+
+# All go.mod files tracked in the repo (handles multi-module repos, e.g. examples/).
+mapfile -t GOMODS < <(git ls-files | grep -E '(^|/)go\.mod$' || true)
+[ ${#GOMODS[@]} -eq 0 ] && exit 0
+
+emit_local_costa_replaces() {
+  # prints one Old.Path per line for costa92 replaces whose target is a local path
+  go mod edit -json | "$PY" -c '
+import json,sys
+d=json.load(sys.stdin)
+for r in (d.get("Replace") or []):
+    op=r["Old"]["Path"]; np=r["New"]["Path"]; nv=r["New"].get("Version","")
+    if op.startswith("github.com/costa92/") and nv=="" and (np.startswith(".") or np.startswith("/")):
+        print(op)
+'
+}
+
+changed=0
+for gomod in "${GOMODS[@]}"; do
+  dir=$(dirname "$gomod")
+  mapfile -t REPL < <(cd "$dir" && emit_local_costa_replaces)
+  [ ${#REPL[@]} -eq 0 ] && continue
+
+  echo "pre-commit[replace-guard]: $gomod has local costa92 replace(s): ${REPL[*]}"
+
+  # Back up for rollback. Track whether go.sum pre-existed.
+  cp "$dir/go.mod" "$dir/.go.mod.precommit.bak"
+  had_sum=0
+  if [ -f "$dir/go.sum" ]; then had_sum=1; cp "$dir/go.sum" "$dir/.go.sum.precommit.bak"; fi
+
+  if ( cd "$dir"
+        # First drop every local replace AND its require pin — a leftover
+        # placeholder require (e.g. v0.0.0, resolvable only via the replace)
+        # would poison module-graph loading for the `go get` below.
+        for mod in "${REPL[@]}"; do
+          go mod edit -dropreplace="$mod" -droprequire="$mod"
+        done
+        # Then pin each to its latest published version (proxy query; the exact
+        # module path is used so /vN major-version paths resolve correctly).
+        for mod in "${REPL[@]}"; do
+          if ! go get "$mod@latest"; then
+            echo "::error:: cannot resolve $mod@latest (no published tag, or offline)" >&2
+            exit 3
+          fi
+        done
+        go mod tidy
+        go build ./... ); then
+    rm -f "$dir/.go.mod.precommit.bak" "$dir/.go.sum.precommit.bak"
+    git add "$dir/go.mod"
+    [ -f "$dir/go.sum" ] && git add "$dir/go.sum"
+    changed=1
+  else
+    echo "pre-commit[replace-guard]: auto-fix of $gomod failed to resolve/build — reverting, commit ABORTED." >&2
+    echo "  Fix the dependency manually, or use 'git commit --no-verify' to keep the local replace." >&2
+    mv "$dir/.go.mod.precommit.bak" "$dir/go.mod"
+    if [ "$had_sum" = "1" ]; then mv "$dir/.go.sum.precommit.bak" "$dir/go.sum"; else rm -f "$dir/go.sum" "$dir/.go.sum.precommit.bak"; fi
+    exit 1
+  fi
+done
+
+if [ "$changed" = "1" ]; then
+  echo "pre-commit[replace-guard]: dropped local replace(s), pinned latest tag(s), re-staged go.mod/go.sum."
+  echo "  (Keep local replaces next time with: git commit --no-verify)"
+fi
+exit 0
