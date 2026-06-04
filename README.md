@@ -25,6 +25,9 @@ llm-agent-ecosystem/
 ├── llm-agent-providers/             # OpenAI / Anthropic / Ollama / DeepSeek / MiniMax adapters
 ├── llm-agent-customer-support/      # demo customer-support reference service
 ├── llm-agent-flow/                  # serializable flow IR + DAG executor (v0.1.x stable)
+├── llm-agent-builtin/               # ready-to-use agent Tools (calculator, note, search, terminal)
+├── llm-agent-policy/                # ChatModel policy decorator (PII / injection / length gates)
+├── llm-agent-comm/                  # inter-agent comm: base transport + A2A + MCP protocols
 ├── llm-agent-memory/                # SDK-only durable memory abstractions and manager surface
 ├── llm-agent-memory-contract/       # backend-neutral durable contract (records, events, outbox)
 ├── llm-agent-memory-postgres/       # Postgres durable backend + transactional outbox relay
@@ -44,6 +47,9 @@ llm-agent-ecosystem/
 | `llm-agent-providers` | real provider adapters (OpenAI, Anthropic, Ollama, DeepSeek, MiniMax) | **v0.2.5** | `main` | <https://github.com/costa92/llm-agent-providers> |
 | `llm-agent-customer-support` | deployable demo service tying the stack together | **v0.2.3** | `main` | <https://github.com/costa92/llm-agent-customer-support> |
 | `llm-agent-flow` | serializable flow IR + DAG executor (v0.1.x stable) | **v0.1.4** | `main` | <https://github.com/costa92/llm-agent-flow> |
+| `llm-agent-builtin` | ready-to-use agent `Tool` implementations (calculator, note, search, terminal) | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-builtin> |
+| `llm-agent-policy` | `ChatModel` policy decorator — PII redaction, injection scanning, length gates | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-policy> |
+| `llm-agent-comm` | inter-agent communication — transport/envelope base + A2A + MCP protocols | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-comm> |
 | `llm-agent-memory` | SDK-only memory package and stable durable abstractions | **v1.0.0** | `main` | <https://github.com/costa92/llm-agent-memory> |
 | `llm-agent-memory-contract` | backend-neutral durable contract (records, events, outbox, idempotency) | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-contract> |
 | `llm-agent-memory-postgres` | concrete Postgres memory backend, migrations, and outbox relay | **v0.1.0** | `main` | <https://github.com/costa92/llm-agent-memory-postgres> |
@@ -144,6 +150,9 @@ llm-agent-customer-support  ──depends on──▶  llm-agent + llm-agent-con
 llm-agent-otel              ──depends on──▶  llm-agent + llm-agent-contract + llm-agent-rag + llm-agent-flow
 llm-agent-providers         ──depends on──▶  llm-agent + llm-agent-contract
 llm-agent-flow              ──depends on──▶  llm-agent (+ llm-agent-contract, indirect)
+llm-agent-builtin           ──depends on──▶  llm-agent-contract (Tool interface; stdlib otherwise)
+llm-agent-policy            ──depends on──▶  llm-agent-contract (ChatModel decorator; stdlib otherwise)
+llm-agent-comm              ──depends on──▶  llm-agent-contract (A2A/MCP + base; stdlib otherwise; ANP stayed in core)
 llm-agent-memory            ──depends on──▶  llm-agent (SDK-only durable abstractions; no other sibling edges)
 llm-agent-memory-contract   ──depends on──▶  (nothing — stdlib only, backend-neutral durable contract)
 llm-agent-memory-postgres   ──depends on──▶  llm-agent-memory-contract

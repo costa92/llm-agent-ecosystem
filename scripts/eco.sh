@@ -17,6 +17,9 @@ all_repos=(
   llm-agent-memory-postgres
   llm-agent-memory-worker
   llm-agent-memory-client
+  llm-agent-builtin
+  llm-agent-policy
+  llm-agent-comm
 )
 
 launchable_repos=(
@@ -39,6 +42,9 @@ repo_url() {
     llm-agent-memory-contract) printf '%s\n' 'https://github.com/costa92/llm-agent-memory-contract.git' ;;
     llm-agent-memory-worker) printf '%s\n' 'https://github.com/costa92/llm-agent-memory-worker.git' ;;
     llm-agent-memory-client) printf '%s\n' 'https://github.com/costa92/llm-agent-memory-client.git' ;;
+    llm-agent-builtin) printf '%s\n' 'https://github.com/costa92/llm-agent-builtin.git' ;;
+    llm-agent-policy) printf '%s\n' 'https://github.com/costa92/llm-agent-policy.git' ;;
+    llm-agent-comm) printf '%s\n' 'https://github.com/costa92/llm-agent-comm.git' ;;
     *) printf '%s\n' "" ;;
   esac
 }
