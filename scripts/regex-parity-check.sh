@@ -3,8 +3,10 @@
 # regex tables that are COPIED (not imported) between the core and rag
 # repos must not silently diverge.
 #
-# Background. llm-agent/policy/patterns.go carries a verbatim copy of the
+# Background. llm-agent-policy/patterns.go carries a verbatim copy of the
 # regex source strings from llm-agent-rag/guard/{redact,inject}.go. The
+# policy decorator was extracted out of core (llm-agent/policy) into its own
+# sibling repo (Phase A, 2026-06), so this gate now points at llm-agent-policy. The
 # copy is intentional (KC-3 per-repo source-of-truth; KS-5 keeps rag a
 # frozen fixed point — no shared upstream module). The cost of "copy, not
 # import" is that the two halves can drift with nobody noticing — neither
@@ -39,7 +41,7 @@ set -euo pipefail
 ECOSYSTEM_ROOT=${ECOSYSTEM_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 echo "ECOSYSTEM_ROOT=$ECOSYSTEM_ROOT"
 
-CORE_FILE="$ECOSYSTEM_ROOT/llm-agent/policy/patterns.go"
+CORE_FILE="$ECOSYSTEM_ROOT/llm-agent-policy/patterns.go"
 RAG_INJECT="$ECOSYSTEM_ROOT/llm-agent-rag/guard/inject.go"
 RAG_REDACT="$ECOSYSTEM_ROOT/llm-agent-rag/guard/redact.go"
 
