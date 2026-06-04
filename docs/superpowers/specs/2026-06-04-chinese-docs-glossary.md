@@ -82,7 +82,7 @@
 | map-reduce | map-reduce | 保留不译 |
 | reflection | 反思 | Self-RAG 语境；类型名 `ReflectionOptions` 不译 |
 | Self-RAG | Self-RAG | 保留不译 |
-| grounding / groundedness | 接地性 | grounded 译「有接地（依据）」 |
+| grounding / groundedness | 依据性（grounding） | grounded 译「有依据的」；指答案有检索证据支撑、忠实于证据 |
 | query expansion | 查询扩展 | MQE / HyDE 保留不译 |
 | recall (检索) | 召回 | recall@k 保留；指标名 `recall_*_total` 不译 |
 | precision | 精确率 | precision@k 保留 |
@@ -123,11 +123,11 @@
 | deterministic | 确定性的 | |
 | golden test | 黄金测试 | golden-testable 译「可黄金测试的」 |
 | mock | 模拟（mock） | 类型名 `ScriptedLLM` / `ChatOnlyMock` 不译 |
-| supervisor | 督导器 | 类型名 `Supervisor` 不译 |
+| supervisor | 监督者 | 类型名 `Supervisor` 不译 |
 | orchestration | 编排 | 包名 `orchestrate` 不译 |
 | pipeline | 流水线 | 类型名 `Pipeline` 不译 |
 | fan-out / fan-in | 扇出 / 扇入 | 类型名 `FanOutFanIn` 不译 |
-| planner / aggregator | 规划器 / 汇聚器 | 角色名，字段名保留不译 |
+| planner / aggregator | 规划器 / 聚合器 | 角色名，字段名保留不译 |
 | handoff | 交接 | |
 | state graph | 状态图 | 类型名 `StateGraph` 不译 |
 | node / edge | 节点 / 边 | 类型名 `Node` / `Edge` 不译 |
@@ -152,7 +152,7 @@
 | exporter | 导出器 | OTLP 保留不译 |
 | sampler / sampling | 采样器 / 采样 | |
 | meter / metrics | 计量器 / 指标 | 具体指标名不译 |
-| counter / gauge | 计数器 / 仪表盘量 | |
+| counter / gauge | 计数器 / 测量值（gauge） | 指标类型名 `Gauge` 在代码/文档中保留不译 |
 | cardinality | 基数 | low-cardinality 译「低基数」 |
 | semconv (semantic conventions) | 语义约定（semconv） | semconv 保留不译 |
 | observer hook | 观察者钩子 | 类型名 `Observer` 不译 |
