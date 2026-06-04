@@ -17,3 +17,7 @@
 /go.work.sum
 /cmd/depcheck/depcheck
 /cmd/depcheck/depcheck.json
+/llm-agent-console/
+/llm-agent-builtin/
+/llm-agent-policy/
+/llm-agent-comm/
