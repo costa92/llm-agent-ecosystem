@@ -1,58 +1,47 @@
-# eino 对照：三件基础能力补全计划（索引）
+# eino 对照：功能支持状态与待补充项
 
-对照 cloudwego/eino 的核心设计支柱，本项目缺三件"基础能力"。这里是三份计划的索引，以及把它们钉在一起的**跨计划契约**与**实施顺序**。
+对照 cloudwego/eino 的核心能力，本项目不需要照搬组件数量。本文只记录**当前项目已经支持什么、还缺什么功能能力**，用于后续拆计划时参考。
 
-> 背景：本项目相对 eino 已在多 Agent（A2A/MCP）、RAG（GraphRAG/主动检索/评测）、记忆分层、policy gates 守护、Provider 覆盖上领先；差距集中在 eino 的编排支柱——**类型安全编排 + 流式自动适配 + Prompt 模板组件 + HITL checkpoint**。
+> 审核结论更新：经多轮代码审核，Prompt / ChatTemplate、类型安全编排、流式自动适配、HITL / checkpoint / resume 已在当前代码中具备支持，不再作为原始“待补充功能”列出。
 
-## 三份计划
+## 当前项目的相对优势
 
-| 计划 | 文件 | 仓库 | 规模 |
+对照 eino，当前项目已经具备或更深入的能力：
+
+- **RAG / GraphRAG 更深**：`llm-agent-rag` 已有导入、检索、GraphRAG、主动检索、诊断、评测、漂移分析与 Postgres/pgvector 后端。
+- **Durable Memory 是独立体系**：`llm-agent-memory-*` 已拆出 contract、SDK、Postgres backend、HTTP gateway、worker、client，并有 outbox、session lifecycle、recall cache、promotion policy。
+- **Provider 覆盖更贴近真实接入**：`llm-agent-providers` 已覆盖 OpenAI、Anthropic、Ollama、DeepSeek、MiniMax、Volcengine、Google、Kimi 等 provider surface。
+- **Policy 与通信协议独立化**：`llm-agent-policy` 提供 capability-preserving guardrails；`llm-agent-comm` 提供 A2A/MCP/transport 抽象。
+- **JSON DAG + flowd 是差异化资产**：`llm-agent-flow` 已有可序列化流程定义、持久化 run history、HTTP/SSE surface 和事件审计。
+
+因此，本轮补齐重点不是增加更多组件名，而是让已有能力能通过更强的编排层组合起来。
+
+## 已支持的能力
+
+| 能力 | 当前项目支持 | 代码证据 | 边界 |
 |---|---|---|---|
-| 1. ChatTemplate 组件 | [`../chat-template/PLAN.md`](../chat-template/PLAN.md) | `llm-agent-contract`（新 `prompt/` 包） | 小 |
-| 2+3. **flow v2 协同设计**（typed Graph + checkpoint/HITL 同生） | [`../flow-v2/PLAN.md`](../flow-v2/PLAN.md) ⭐ | `llm-agent-flow/v2`（新模块路径，引擎重设） | 大（分阶段） |
-| ↳ 原 flow-graph（已并入 flow-v2） | [`../flow-graph/PLAN.md`](../flow-graph/PLAN.md) | — | superseded |
-| ↳ 原 flow-checkpoint（已并入 flow-v2） | [`../flow-checkpoint/PLAN.md`](../flow-checkpoint/PLAN.md) | — | superseded |
+| **Prompt / ChatTemplate 通用组件** | 支持 system、few-shot、history、user turn 组合，支持 brace 与 `text/template` 两类模板引擎，并可输出 `llm.Request` | `llm-agent-contract/prompt` | 已是可用基础组件，后续只需按业务场景接入。 |
+| **类型安全编排** | 支持 code-first typed graph、typed node、edge 类型检查、typed invoke | `llm-agent-flow/v2/flow/graph` | 代码内编排已支持；JSON DAG 仍是独立的可序列化前端。 |
+| **流式自动适配** | 支持 linear stream、branch DAG、Copy DAG、stream merge/zip，并提供 stream-to-value concatenator | `llm-agent-flow/v2/flow/graph` | 不是任意复杂图全自动流式；parallel/combine fan-in、implicit tee、diamond 等复杂形态按当前测试预期降级。 |
+| **HITL / checkpoint / resume** | 支持 interrupt、suspension、checkpoint store、`RunResumable`、`Resume`，flowd 支持 resume route | `llm-agent-flow/v2/flow`、`llm-agent-flow/cmd/flowd/server` | flowd resume route 依赖 v2 registry 与 checkpoint store 已配置。 |
+| **Workflow 字段级数据映射** | 支持从全局输入或上游节点输出端口选字段，组装目标节点输入端口 | `llm-agent-flow/v2/flow` | 首版支持字符串 path、`map[string]any`/`map[string]string`/struct 字段读取，以及目标端口 map 组装。 |
+| **统一 Agent 运行事件** | 支持 `RunEvent` 统一 envelope，可从 Agent `StepEvent`、LLM `StreamEvent`、Flow v2 `Event` 转换 | `llm-agent-contract/agents`、`llm-agent-flow/v2/flow` | 首版不替换现有 stream 接口；调用方需要统一事件时显式转换。 |
+| **统一 Callback / Aspect 能力** | 支持观察式 `Callback`、callback chain，以及 Agent wrapper 镜像统一 `RunEvent` | `llm-agent-contract/agents`、`llm-agent` | 首版只做观测，不做阻断/改写；policy gate 仍负责安全拦截。 |
+| **预置 Agent Pattern 产品化** | 支持 `patterns` catalog/factory，覆盖单 Agent preset 与多 Agent orchestration factory | `llm-agent/patterns` | 首版不新增执行引擎；Workspace 不默认启用 shell/terminal。 |
+| **DevOps 可视化与调试** | 支持 flow 拓扑 debug JSON 与 run 级 trace/debug JSON，可查看节点输入输出、事件时间线、replay 入口与 suspended 摘要 | `llm-agent-flow/cmd/flowd/server` | 首版是 API 级调试视图，不包含前端 UI、图编辑器或 IDE 插件。 |
 
-> **flow-graph 与 flow-checkpoint 已合并为 [`flow-v2/PLAN.md`](../flow-v2/PLAN.md)**——两轮审核证明 typed Graph 不能在现有引擎上加法泛化（独立包调不到 unexported `runAny`、`Runner`/`FlowEvent` 是冻结 string 面），且 checkpoint 序列化与 typed 数据面深度耦合。v2 走新模块路径 `llm-agent-flow/v2`（`compatibility.md:42-44` 的破坏性变更出口），v0.1 冻结保留、JSON DAG 作为 v2 一等前端保留。两份原计划保留作设计参考。
+## 需要补充的功能
 
-## 跨计划契约（已拍板，三份计划据此对齐）
+当前首轮对照项均已有功能落点。后续可继续增强的是交互体验与产品化程度，例如前端图调试 UI、图编辑器、IDE 插件等，但不再作为本轮原始功能缺口。
 
-1. **CT-1 — ChatTemplate 输出类型**：`prompt.Template.Format` 基接口返回 `[]llm.Message`；可选 `prompt.Requester.FormatRequest` 返回 `llm.Request`。flow-graph 的 **Template 节点消费 `prompt.Requester`**（`FormatRequest → llm.Request`），下游 ChatModel 节点直接拿到 `llm.Request`。
-2. **CP-1 — checkpoint 快照边界**：checkpoint 在 **layer 边界**快照（绝不在流飞行中）。typed/`any` 数据面与 `StreamReader` 在 v1 **不可 checkpoint**，不可序列化的图返回 `ErrNotCheckpointable`。
-3. **序列化约束（flow-graph → flow-checkpoint）**：flow-graph 引入的类型化数据面会让快照变难。约束 flow-graph：图状态应 **JSON 可序列化 by construction**，并暴露编译期 `Checkpointable()/Serializable() bool`；避免 gob + 全局类型注册（跨模块脆弱）。
-4. **依赖时效**：contract 当前最新 tag = **v0.4.0**；chat-template 发 **v0.5.0**（新增 `prompt/` 包）。flow-graph 的 Template 节点依赖 contract v0.5.0 已发布。
+## 优先级判断
 
-## 实施顺序（两轮审核后修订，2026-06-05）
+1. **本轮已补齐首版**：DevOps 可视化与调试体验。
+2. **已支持但可继续增强**：Prompt / ChatTemplate、类型安全编排、流式自动适配、HITL / checkpoint / resume、Workflow 字段级数据映射、统一 Agent 运行事件、统一 Callback / Aspect、预置 Agent Pattern 产品化、DevOps 可视化与调试。
 
-两轮审核（Plan agent + codex）把"flow-graph 共用现有引擎"定为最高风险假设并证伪（独立包调不到 unexported `runAny`、`Runner`/`FlowEvent` 是冻结 string 面）。用户拍板：**flow-graph 走 v2 引擎重设，与 checkpoint 联合设计**。原"chat-template → checkpoint先行 → flow-graph 分阶段"的顺序**作废**。
+## 审核边界
 
-```
-chat-template (contract v0.5.0, 独立先行)     ← 只 contract 叶子包；agent/RAG 集成移出本里程碑
-        │  无下游耦合，可独立落地
-        ▼
-[先决修复] contract: 修 AccumulateStream EOF 判断 (errors.Is) ; 统一 Tool 面
-        │
-        ▼
-flow v2  =  flow-graph  +  flow-checkpoint  （一个协同工程，major bump）
-   一次性联合设计：typed 数据载体 · Runner/decorator · FlowEvent 形状 ·
-   store 语义 · checkpoint 序列化 · flowd 集成
-```
-
-理由：
-- **chat-template 先行且独立**——最小、零破坏；但**不含** agent/RAG 集成（核心仓用具体 `SimpleOptions` 结构体、ReAct 用 fmt.Sprintf 拼 prompt，集成是跨 agent 范式的多步工作，独立里程碑）。
-- **flow-graph 与 checkpoint 合并为 flow v2**——typed 值的序列化、`StreamReader` 不可快照、layer 边界快照、RunID 所有权、`FinishRun` suspended 转移、事件/Runner/store 的破坏性演进，全部互相牵连，必须一次设计。**不并行做 checkpoint 和 any-引擎**（codex 明确警告）。
-- **不再有 "string-map 引擎上先跑 HITL" 的独立 MVP**——它依赖的 string 数据面正是 v2 要替换的；先做会与 v2 互相拉扯。
-
-## 各计划当前判定（2-round review）
-
-| 计划 | 判定 | 去向 |
-|---|---|---|
-| chat-template | APPROVE-WITH-CHANGES | 独立落地，应用 R1-R6 修订 |
-| flow-graph | NEEDS-REWORK | 并入 flow v2 协同设计 |
-| flow-checkpoint | NEEDS-REWORK | 并入 flow v2 协同设计 |
-
-## 共同原则（karpathy 准则）
-
-- 三份计划全部**向后兼容、纯加法**：新包/新方法/新可选接口，不动 frozen API（`NodeKind`/`Runner`/`Store`/contract 三包导出）。
-- 每个任务带**可验证目标**（TDD：先写失败测试再实现）。
-- 明确 **MVP 边界**与**开放问题**，不静默选边——见各计划末尾 open questions。
+- 本文只记录功能缺口，不写代码草案。
+- 本文不讨论兼容性设计或实现路线。
+- 本文不替代各子项目已有详细计划。
+- 本文不要求为已支持能力重复立项。

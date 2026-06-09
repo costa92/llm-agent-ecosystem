@@ -5,6 +5,7 @@ use (
 	./llm-agent-contract
 	./llm-agent-customer-support
 	./llm-agent-flow
+	./llm-agent-flow/v2
 	./llm-agent-memory
 	./llm-agent-memory-client
 	./llm-agent-memory-contract
