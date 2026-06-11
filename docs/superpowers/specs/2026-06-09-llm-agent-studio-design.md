@@ -1,9 +1,16 @@
 # llm-agent-studio 设计文档（多 Agent 工作流可视化编排器）
 
+> **⚠️ 已被取代（2026-06-10，产品转向）**
+>
+> llm-agent-studio 已从「通用工作流可视化编排器」转向「基于 Multi-Agent 的内容生产平台」。
+> 权威产品需求见 [[2026-06-10-llm-agent-studio-prd]]（AI Studio PRD V1.0）。
+> 本文档不再是产品定义，降级为**底层引擎/技术参考**：其中 flow v1/v2 引擎、HITL checkpoint/resume、
+> 节点注册、SSE 时间线、`llm-agent-authz` 接线等仍是可复用的实现事实，供新 PRD 的工作流引擎落地参考。
+
 - 日期：2026-06-09
-- 状态：设计已批准，待写实现计划
+- 状态：**已被取代**（见上）；原状态「设计已批准，待写实现计划」
 - 类型：新案例项目（准生产级，独立 sibling 仓）
-- 相关：[[project_case-study-projects]]；姊妹项目 llm-agent-kb（同期）
+- 相关：[[project_case-study-projects]]；姊妹项目 llm-agent-kb（同期）；取代者 [[2026-06-10-llm-agent-studio-prd]]
 
 ## 1. 目标与定位
 
