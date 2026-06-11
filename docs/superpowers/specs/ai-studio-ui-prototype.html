@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Studio · UI 原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-base:#17191E; --bg-surface:#1F232A; --bg-raised:#272C34;
+  --line:#343A44; --text-1:#EDEEF0; --text-2:#9AA1AC; --text-3:#666D78;
+  --amber:#E8A33D; --script:#5C9BD6; --board:#9C7BDA; --asset:#E8A33D;
+  --review:#4FB286; --danger:#E05F5B;
+  --mono:"JetBrains Mono",monospace; --disp:"Space Grotesk","Noto Sans SC",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg-base);color:var(--text-1);font:13px/1.55 "Noto Sans SC",system-ui,sans-serif;height:100vh;display:flex;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.mono{font-family:var(--mono)}
+/* ─ 左侧导航栏 ─ */
+.rail{width:64px;background:var(--bg-surface);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px;flex-shrink:0}
+.logo{width:34px;height:34px;border-radius:8px;background:repeating-linear-gradient(135deg,var(--amber) 0 6px,#1a1a1a 6px 12px);margin-bottom:14px;position:relative}
+.logo::after{content:"AS";position:absolute;inset:5px;background:var(--bg-surface);border-radius:4px;display:grid;place-items:center;font:700 11px var(--disp);color:var(--amber)}
+.nav-btn{width:44px;height:44px;border-radius:10px;display:grid;place-items:center;color:var(--text-3);font-size:11px;line-height:1.2;text-align:center;transition:.15s}
+.nav-btn:hover{background:var(--bg-raised);color:var(--text-2)}
+.nav-btn.on{background:rgba(232,163,61,.12);color:var(--amber)}
+.nav-btn svg{width:18px;height:18px;display:block;margin:0 auto 2px}
+.rail .spacer{flex:1}
+.avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#5C9BD6,#9C7BDA);display:grid;place-items:center;font:600 11px var(--disp)}
+/* ─ 屏幕容器 ─ */
+.screen{flex:1;display:none;flex-direction:column;overflow:hidden}
+.screen.on{display:flex}
+.page-head{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-shrink:0;position:relative}
+.page-title{font:600 17px "Noto Sans SC"}
+.crumb{color:var(--text-3);font-size:12px}
+/* 徽标与按钮 */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500}
+.badge .dot{width:6px;height:6px;border-radius:50%}
+.b-running{background:rgba(232,163,61,.12);color:var(--amber)} .b-running .dot{background:var(--amber);animation:pulse 1.4s infinite}
+.b-done{background:rgba(79,178,134,.12);color:var(--review)} .b-done .dot{background:var(--review)}
+.b-pend{background:rgba(232,163,61,.12);color:var(--amber)} .b-pend .dot{background:var(--amber)}
+.b-rej{background:rgba(224,95,91,.12);color:var(--danger)} .b-rej .dot{background:var(--danger)}
+@keyframes pulse{50%{opacity:.35}}
+.btn{padding:7px 16px;border-radius:8px;font-weight:500;font-size:13px;transition:.15s}
+.btn-amber{background:var(--amber);color:#1a1408}
+.btn-amber:hover{background:#f0b257}
+.btn-ghost{border:1px solid var(--line);color:var(--text-2)}
+.btn-ghost:hover{border-color:var(--text-3);color:var(--text-1)}
+.btn-green{background:rgba(79,178,134,.15);color:var(--review);border:1px solid rgba(79,178,134,.4)}
+.btn-red{background:rgba(224,95,91,.12);color:var(--danger);border:1px solid rgba(224,95,91,.35)}
+kbd{font:600 10px var(--mono);background:var(--bg-raised);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--text-2);margin-left:6px}
+/* 场记板运行条 */
+.slate-bar{position:absolute;left:0;right:0;bottom:-1px;height:3px;background:repeating-linear-gradient(115deg,var(--amber) 0 10px,transparent 10px 20px);background-size:28px 3px;animation:slide 1s linear infinite}
+@keyframes slide{to{background-position:28px 0}}
+@media (prefers-reduced-motion:reduce){.slate-bar,.b-running .dot,.node.running .ring{animation:none}}
+/* ─ 工作台三栏 ─ */
+.ws{flex:1;display:grid;grid-template-columns:250px 1fr 330px;overflow:hidden}
+.col{overflow-y:auto;padding:18px}
+.col-l{border-right:1px solid var(--line)}
+.col-r{border-left:1px solid var(--line)}
+.sec{margin-bottom:20px}
+.sec h4{font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.08em;margin-bottom:8px}
+.brief-card{background:var(--bg-surface);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;color:var(--text-2);line-height:1.6}
+.meta-row{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;color:var(--text-2)}
+.meta-row b{color:var(--text-1);font-weight:500}
+.warn-strip{background:rgba(232,163,61,.1);border:1px solid rgba(232,163,61,.3);border-radius:8px;padding:8px 10px;font-size:11.5px;color:var(--amber)}
+.log-line{font:11px var(--mono);color:var(--text-3);padding:3px 0;border-bottom:1px dashed #23272e}
+.log-line em{color:var(--text-2);font-style:normal}
+/* ─ 制片轨道 ─ */
+.rail-track{max-width:560px;margin:0 auto;position:relative;padding-left:8px}
+.stage{display:flex;gap:16px;position:relative;padding-bottom:30px}
+.stage::before{content:"";position:absolute;left:21px;top:30px;bottom:0;width:2px;background:var(--line)}
+.stage:last-child::before{display:none}
+.stage.linked::before{background:var(--cur,var(--line))}
+.node{width:28px;height:28px;border-radius:50%;border:2px solid var(--line);background:var(--bg-base);display:grid;place-items:center;flex-shrink:0;position:relative;z-index:1;transition:.2s;margin-left:7px}
+.node .ico{font:700 10px var(--disp);color:var(--text-3)}
+.node.done{border-color:var(--c);background:var(--c)}
+.node.done .ico{color:#14161a}
+.node.running{border-color:var(--amber)}
+.node.running .ring{position:absolute;inset:-6px;border-radius:50%;border:2px dashed var(--amber);animation:spin 3s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.node.failed{border-color:var(--danger);background:rgba(224,95,91,.15)}
+.node.failed .ico{color:var(--danger)}
+.stage-body{flex:1;padding-top:2px}
+.stage-name{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px}
+.stage-name .sn{font:700 10px var(--mono);color:var(--text-3)}
+.stage-sub{font-size:11.5px;color:var(--text-3);margin-top:2px}
+.stage-sub .mono{font-size:10.5px}
+.tchip{font-size:10.5px;padding:1px 8px;border-radius:999px;font-weight:500}
+.t-done{background:rgba(79,178,134,.13);color:var(--review)}
+.t-run{color:#1a1408;background:repeating-linear-gradient(115deg,var(--amber) 0 8px,#c9882a 8px 16px)}
+.t-pend{background:var(--bg-raised);color:var(--text-3)}
+.t-block{border:1px dashed var(--line);color:var(--text-3)}
+.t-fail{background:rgba(224,95,91,.13);color:var(--danger)}
+/* 并行 asset 节点组 */
+.fan{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
+.pip{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--line);transition:.2s}
+.pip.done{background:var(--asset);border-color:var(--asset)}
+.pip.running{border-color:var(--amber);background:repeating-linear-gradient(115deg,rgba(232,163,61,.7) 0 4px,transparent 4px 8px)}
+.pip.failed{border-color:var(--danger);background:rgba(224,95,91,.3)}
+/* 右栏预览 */
+.prev-thumb{height:150px;border-radius:10px;border:1px solid var(--line);margin-bottom:10px}
+.kv{display:flex;justify-content:space-between;font-size:11.5px;padding:4px 0}
+.kv span{color:var(--text-3)} .kv b{font-weight:500;color:var(--text-2)}
+.prompt-box{font:11px/1.6 var(--mono);background:var(--bg-base);border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text-2);margin-top:8px}
+/* ─ 审核看板 ─ */
+.review-wrap{flex:1;display:grid;grid-template-columns:1fr 460px;overflow:hidden}
+.grid-area{overflow-y:auto;padding:20px}
+.filters{display:flex;gap:8px;margin-bottom:16px;align-items:center}
+.chip-sel{background:var(--bg-raised);border:1px solid var(--line);border-radius:8px;padding:5px 12px;font-size:12px;color:var(--text-2)}
+.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.acard{border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--bg-surface);cursor:pointer;transition:.15s;text-align:left;padding:0}
+.acard:hover{border-color:var(--text-3);transform:translateY(-2px)}
+.acard.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+.acard .img{height:110px}
+.acard .cap{padding:7px 9px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-2)}
+.vtag{font:600 10px var(--mono);color:var(--text-3)}
+/* 抽屉 */
+.drawer{border-left:1px solid var(--line);background:var(--bg-surface);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.drawer .hero{height:240px;border-radius:12px;border:1px solid var(--line)}
+.lineage{display:flex;align-items:center;gap:8px;font:11px var(--mono)}
+.lin-node{padding:3px 10px;border-radius:6px;border:1px solid var(--line);color:var(--text-3)}
+.lin-node.cur{border-color:var(--amber);color:var(--amber);background:rgba(232,163,61,.08)}
+.actions{display:flex;gap:8px;margin-top:4px}
+.actions .btn{flex:1}
+/* ─ 资产库 ─ */
+.lib-wrap{flex:1;display:grid;grid-template-columns:190px 1fr;overflow:hidden}
+.fil-rail{border-right:1px solid var(--line);padding:18px;overflow-y:auto}
+.fcheck{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);padding:4px 0;cursor:pointer}
+.fcheck input{accent-color:var(--amber)}
+/* ─ 成本中心 ─ */
+.cost-body{flex:1;overflow-y:auto;padding:24px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px}
+.stat{background:var(--bg-surface);border:1px solid var(--line);border-radius:12px;padding:18px}
+.stat .lab{font-size:11.5px;color:var(--text-3);margin-bottom:6px}
+.stat .num{font:700 30px var(--disp)}
+.stat .num small{font-size:14px;color:var(--text-3);font-weight:500}
+.bars{background:var(--bg-surface);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:24px}
+.bar-row{display:grid;grid-template-columns:130px 1fr 70px;align-items:center;gap:12px;padding:7px 0;font-size:12px}
+.bar-bg{height:10px;border-radius:5px;background:var(--bg-base);overflow:hidden}
+.bar-fill{height:100%;border-radius:5px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--text-3);font-weight:500;font-size:11px;padding:8px 12px;border-bottom:1px solid var(--line)}
+td{padding:9px 12px;border-bottom:1px solid #23272e;color:var(--text-2)}
+td.num{font-family:var(--mono);text-align:right;color:var(--text-1)}
+th.num{text-align:right}
+/* 占位"图片" */
+.ph{background-size:cover;position:relative}
+.ph::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 30% 25%,rgba(255,255,255,.14),transparent 55%)}
+.ph-guofeng{background:linear-gradient(150deg,#2b3a36,#5a7d6a 45%,#c9b98a)}
+.ph-guofeng2{background:linear-gradient(160deg,#23303a,#4a6a78 50%,#d9c9a0)}
+.ph-cyber{background:linear-gradient(140deg,#1a1030,#5a2a7a 50%,#e85fa0)}
+.ph-cyber2{background:linear-gradient(160deg,#101a35,#2a4a8a 55%,#5fd0e8)}
+.ph-ghibli{background:linear-gradient(150deg,#2a4a3a,#6a9a5a 50%,#e8d98a)}
+.ph-pixar{background:linear-gradient(145deg,#3a2a1a,#c97a3a 55%,#f0c060)}
+.toolbar-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.sse-dot{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3)}
+.sse-dot i{width:7px;height:7px;border-radius:50%;background:var(--review);animation:pulse 2s infinite}
+.hint{font-size:11px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<!-- 左侧图标导航 -->
+<nav class="rail">
+  <div class="logo" title="AI Studio"></div>
+  <button class="nav-btn on" data-go="ws">项目</button>
+  <button class="nav-btn" data-go="review">审核</button>
+  <button class="nav-btn" data-go="lib">资产</button>
+  <button class="nav-btn" data-go="cost">成本</button>
+  <div class="spacer"></div>
+  <div class="avatar">小A</div>
+</nav>
+
+<!-- ════ 屏1:项目工作台 ════ -->
+<section class="screen on" id="ws">
+  <div class="page-head">
+    <span class="crumb">项目 /</span>
+    <span class="page-title">国风茶饮宣传短片</span>
+    <span class="badge b-running" id="proj-badge"><i class="dot"></i><span id="proj-status">生产中</span></span>
+    <div class="toolbar-right">
+      <span class="sse-dot"><i></i>实时连接</span>
+      <button class="btn btn-ghost">取消</button>
+      <button class="btn btn-amber" id="rerun" onclick="resetPipeline()">重新运行</button>
+    </div>
+    <div class="slate-bar" id="slate"></div>
+  </div>
+  <div class="ws">
+    <!-- 左:计划 -->
+    <aside class="col col-l">
+      <div class="sec"><h4>创意 BRIEF</h4>
+        <div class="brief-card">为新中式茶饮品牌做一支 30 秒宣传短片:江南茶馆,黄昏光线,少女与老茶师的传承故事,水墨质感。</div>
+      </div>
+      <div class="sec"><h4>项目信息</h4>
+        <div class="meta-row"><span>内容类型</span><b>短视频</b></div>
+        <div class="meta-row"><span>目标平台</span><b>抖音</b></div>
+        <div class="meta-row"><span>风格</span><b>国风</b></div>
+        <div class="meta-row"><span>计划</span><b class="mono" style="font-size:11px">plan_8f2c</b></div>
+      </div>
+      <div class="sec">
+        <div class="warn-strip">⚠ Planner 输出畸形,已回落默认管线(fallback_used)</div>
+      </div>
+      <div class="sec"><h4>事件日志</h4>
+        <div id="log">
+          <div class="log-line"><em>18:02:11</em> planner_started</div>
+          <div class="log-line"><em>18:02:34</em> todo_ready ×10</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 中:制片轨道 -->
+    <div class="col">
+      <div class="rail-track">
+        <div class="stage linked" style="--cur:var(--review)">
+          <div class="node done" style="--c:var(--review)"><span class="ico">✓</span></div>
+          <div class="stage-body">
+            <div class="stage-name"><span class="sn">S1</span>Planner 规划 <span class="tchip t-done">done</span></div>
+            <div class="stage-sub">产出 10 个 todo · <span class="mono">todo_pl01</span> · 23s</div>
+          </div>
+        </div>
+        <div class="stage linked" style="--cur:var(--script)" id="st-script">
+          <div class="node" style="--c:var(--script)"><span class="ico">S2</span></div>
+          <div class="stage-body">
+            <div class="stage-name"><span class="sn">S2</span>剧本生成 <span class="tchip t-pend">pending</span></div>
+            <div class="stage-sub">ScriptAgent · <span class="mono">todo_sc01</span></div>
+          </div>
+        </div>
+        <div class="stage linked" style="--cur:var(--board)" id="st-board">
+          <div class="node" style="--c:var(--board)"><span class="ico">S3</span></div>
+          <div class="stage-body">
+            <div class="stage-name"><span class="sn">S3</span>分镜拆解 <span class="tchip t-block">blocked</span></div>
+            <div class="stage-sub">StoryboardAgent · 等待 S2</div>
+          </div>
+        </div>
+        <div class="stage linked" style="--cur:var(--asset)" id="st-asset">
+          <div class="node" style="--c:var(--asset)"><span class="ico">S4</span></div>
+          <div class="stage-body">
+            <div class="stage-name"><span class="sn">S4</span>素材生成 <span class="tchip t-block">blocked</span> <span class="hint" id="fan-count"></span></div>
+            <div class="stage-sub">AssetAgent × 8 shots · PromptBuilder 注入「国风」</div>
+            <div class="fan" id="fan"></div>
+          </div>
+        </div>
+        <div class="stage" id="st-review">
+          <div class="node" style="--c:var(--review)"><span class="ico">S5</span></div>
+          <div class="stage-body">
+            <div class="stage-name"><span class="sn">S5</span>人工审核 <span class="tchip t-block">blocked</span></div>
+            <div class="stage-sub">采纳后入资产库 · admin 门禁</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右:工件预览 -->
+    <aside class="col col-r">
+      <div class="sec"><h4>选中节点 · <span class="mono" style="font-size:10px">todo_as03</span></h4>
+        <div class="prev-thumb ph ph-guofeng"></div>
+        <div class="kv"><span>类型</span><b>asset · image</b></div>
+        <div class="kv"><span>Shot</span><b>#03 中景·推 茶馆内黄昏</b></div>
+        <div class="kv"><span>Provider</span><b class="mono" style="font-size:11px">volcengine / seedream</b></div>
+        <div class="kv"><span>耗时 / 重试</span><b class="mono" style="font-size:11px">42s · attempts 1</b></div>
+        <div class="prompt-box">ink-wash style teahouse interior at dusk, warm lantern light, young woman pouring tea, master watching, cinematic medium shot, chinese aesthetic --style guofeng</div>
+      </div>
+      <button class="btn btn-ghost" style="width:100%">在分镜视图中打开</button>
+    </aside>
+  </div>
+</section>
+
+<!-- ════ 屏2:审核看板 ════ -->
+<section class="screen" id="review">
+  <div class="page-head">
+    <span class="page-title">审核看板</span>
+    <span class="badge b-pend"><i class="dot"></i>待审 6</span>
+    <div class="toolbar-right hint">快捷键:采纳<kbd>A</kbd> 退回<kbd>R</kbd> 重生成<kbd>E</kbd> 切换<kbd>←</kbd><kbd>→</kbd></div>
+  </div>
+  <div class="review-wrap">
+    <div class="grid-area">
+      <div class="filters">
+        <button class="chip-sel">项目:全部 ▾</button>
+        <button class="chip-sel">风格:全部 ▾</button>
+        <button class="chip-sel">类型:图片 ▾</button>
+      </div>
+      <div class="asset-grid">
+        <button class="acard sel"><div class="img ph ph-guofeng"></div><div class="cap"><span>#03 茶馆黄昏</span><span class="vtag">v2</span></div></button>
+        <button class="acard"><div class="img ph ph-guofeng2"></div><div class="cap"><span>#04 沏茶特写</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-cyber"></div><div class="cap"><span>#01 霓虹街道</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-cyber2"></div><div class="cap"><span>#02 雨夜天台</span><span class="vtag">v3</span></div></button>
+        <button class="acard"><div class="img ph ph-ghibli"></div><div class="cap"><span>#05 山谷清晨</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-pixar"></div><div class="cap"><span>#06 厨房一角</span><span class="vtag">v1</span></div></button>
+      </div>
+    </div>
+    <div class="drawer">
+      <div class="hero ph ph-guofeng"></div>
+      <div>
+        <div class="kv"><span>项目 / Shot</span><b>国风茶饮短片 · #03 中景·推</b></div>
+        <div class="kv"><span>风格 / Provider</span><b>国风 · volcengine seedream</b></div>
+        <div class="kv"><span>状态</span><b style="color:var(--amber)">pending_acceptance</b></div>
+      </div>
+      <div>
+        <h4 style="font-size:11px;color:var(--text-3);margin-bottom:6px">PROMPT</h4>
+        <div class="prompt-box">ink-wash style teahouse interior at dusk, warm lantern light, young woman pouring tea, elderly tea master watching, cinematic medium shot --style guofeng</div>
+      </div>
+      <div>
+        <h4 style="font-size:11px;color:var(--text-3);margin-bottom:6px">版本血缘</h4>
+        <div class="lineage"><span class="lin-node">v1 已退回</span>→<span class="lin-node cur">v2 当前</span></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-green">✓ 采纳<kbd>A</kbd></button>
+        <button class="btn btn-red">✗ 退回<kbd>R</kbd></button>
+        <button class="btn btn-ghost">✎ 改 Prompt 重生成<kbd>E</kbd></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ 屏3:资产库 ════ -->
+<section class="screen" id="lib">
+  <div class="page-head"><span class="page-title">资产库</span><span class="hint">128 个资产</span>
+    <div class="toolbar-right"><input class="chip-sel" placeholder="按标签搜索…" style="width:200px"></div>
+  </div>
+  <div class="lib-wrap">
+    <aside class="fil-rail">
+      <div class="sec"><h4>类型</h4>
+        <label class="fcheck"><input type="checkbox" checked>图片</label>
+        <label class="fcheck"><input type="checkbox" disabled>视频(二期)</label>
+      </div>
+      <div class="sec"><h4>状态</h4>
+        <label class="fcheck"><input type="checkbox" checked>accepted</label>
+        <label class="fcheck"><input type="checkbox">pending</label>
+        <label class="fcheck"><input type="checkbox">rejected</label>
+      </div>
+      <div class="sec"><h4>风格</h4>
+        <label class="fcheck"><input type="checkbox" checked>国风</label>
+        <label class="fcheck"><input type="checkbox" checked>赛博朋克</label>
+        <label class="fcheck"><input type="checkbox">吉卜力</label>
+        <label class="fcheck"><input type="checkbox">皮克斯</label>
+      </div>
+      <div class="sec"><h4>项目</h4><button class="chip-sel" style="width:100%">全部项目 ▾</button></div>
+    </aside>
+    <div class="grid-area">
+      <div class="asset-grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+        <button class="acard"><div class="img ph ph-guofeng" style="height:130px"></div><div class="cap"><span class="badge b-done" style="font-size:10px"><i class="dot"></i>accepted</span><span class="vtag">v2</span></div></button>
+        <button class="acard"><div class="img ph ph-guofeng2" style="height:130px"></div><div class="cap"><span class="badge b-done" style="font-size:10px"><i class="dot"></i>accepted</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-cyber" style="height:130px"></div><div class="cap"><span class="badge b-pend" style="font-size:10px"><i class="dot"></i>pending</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-cyber2" style="height:130px"></div><div class="cap"><span class="badge b-done" style="font-size:10px"><i class="dot"></i>accepted</span><span class="vtag">v3</span></div></button>
+        <button class="acard"><div class="img ph ph-ghibli" style="height:130px"></div><div class="cap"><span class="badge b-rej" style="font-size:10px"><i class="dot"></i>rejected</span><span class="vtag">v1</span></div></button>
+        <button class="acard"><div class="img ph ph-pixar" style="height:130px"></div><div class="cap"><span class="badge b-done" style="font-size:10px"><i class="dot"></i>accepted</span><span class="vtag">v1</span></div></button>
+      </div>
+      <div style="text-align:center;margin-top:18px"><button class="btn btn-ghost">加载更多</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ 屏4:成本中心 ════ -->
+<section class="screen" id="cost">
+  <div class="page-head"><span class="page-title">成本中心</span>
+    <div class="toolbar-right">
+      <button class="chip-sel">近 30 天 ▾</button>
+    </div>
+  </div>
+  <div class="cost-body">
+    <div class="stats">
+      <div class="stat"><div class="lab">本月成本</div><div class="num">¥ 482<small>.60</small></div></div>
+      <div class="stat"><div class="lab">生成次数</div><div class="num">1,294</div></div>
+      <div class="stat"><div class="lab">Token 用量</div><div class="num">8.2<small> M</small></div></div>
+    </div>
+    <div class="bars">
+      <h4 style="font-size:11px;color:var(--text-3);margin-bottom:12px">按项目成本</h4>
+      <div class="bar-row"><span>国风茶饮短片</span><div class="bar-bg"><div class="bar-fill" style="width:78%;background:var(--asset)"></div></div><span class="mono" style="text-align:right">¥ 216.40</span></div>
+      <div class="bar-row"><span>赛博城市 MV</span><div class="bar-bg"><div class="bar-fill" style="width:52%;background:var(--board)"></div></div><span class="mono" style="text-align:right">¥ 144.20</span></div>
+      <div class="bar-row"><span>绘本《小狐》</span><div class="bar-bg"><div class="bar-fill" style="width:31%;background:var(--script)"></div></div><span class="mono" style="text-align:right">¥ 86.10</span></div>
+      <div class="bar-row"><span>其他</span><div class="bar-bg"><div class="bar-fill" style="width:13%;background:var(--review)"></div></div><span class="mono" style="text-align:right">¥ 35.90</span></div>
+    </div>
+    <div class="bars" style="padding:0;overflow:hidden">
+      <table>
+        <thead><tr><th>时间</th><th>项目</th><th>Provider / Model</th><th>类型</th><th class="num">用量</th><th class="num">金额</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">06-10 18:04</td><td>国风茶饮短片</td><td class="mono">volcengine / seedream</td><td>image</td><td class="num">4 张</td><td class="num">¥ 1.60</td></tr>
+          <tr><td class="mono">06-10 18:02</td><td>国风茶饮短片</td><td class="mono">deepseek / deepseek-chat</td><td>chat</td><td class="num">21.4k tok</td><td class="num">¥ 0.08</td></tr>
+          <tr><td class="mono">06-10 17:55</td><td>赛博城市 MV</td><td class="mono">openai / gpt-image-1</td><td>image</td><td class="num">2 张</td><td class="num">¥ 2.30</td></tr>
+          <tr><td class="mono">06-10 17:41</td><td>赛博城市 MV</td><td class="mono">anthropic / claude</td><td>chat</td><td class="num">36.0k tok</td><td class="num">¥ 0.42</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<script>
+// 导航切换
+document.querySelectorAll('.nav-btn').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.nav-btn').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  document.getElementById(b.dataset.go).classList.add('on');
+}));
+
+// ── 制片轨道:模拟 SSE 推进 ──
+const fan=document.getElementById('fan');
+for(let i=0;i<8;i++){const d=document.createElement('div');d.className='pip';fan.appendChild(d);}
+const log=document.getElementById('log');
+function addLog(t){const d=document.createElement('div');d.className='log-line';
+  const now=new Date().toTimeString().slice(0,8);
+  d.innerHTML=`<em>${now}</em> ${t}`;log.appendChild(d);}
+function setStage(id,state,label){
+  const st=document.getElementById(id),node=st.querySelector('.node'),chip=st.querySelector('.tchip');
+  node.className='node '+state;
+  node.innerHTML = state==='done' ? '<span class="ico">✓</span>'
+    : state==='running' ? '<span class="ring"></span><span class="ico">'+node.querySelector('.ico').textContent.replace('✓',label)+'</span>'
+    : node.innerHTML;
+  chip.className='tchip t-'+(state==='done'?'done':state==='running'?'run':'pend');
+  chip.textContent=state==='done'?'done':state==='running'?'running':'pending';
+}
+let timers=[];
+function resetPipeline(){
+  timers.forEach(clearTimeout);timers=[];
+  ['st-script','st-board','st-asset','st-review'].forEach((id,i)=>{
+    const st=document.getElementById(id);
+    st.querySelector('.node').className='node';
+    st.querySelector('.tchip').className='tchip t-block';
+    st.querySelector('.tchip').textContent='blocked';
+  });
+  document.querySelectorAll('.pip').forEach(p=>p.className='pip');
+  document.getElementById('fan-count').textContent='';
+  document.getElementById('slate').style.display='block';
+  document.getElementById('proj-status').textContent='生产中';
+  run();
+}
+function run(){
+  const T=(ms,fn)=>timers.push(setTimeout(fn,ms));
+  T(600,()=>{setStage('st-script','running','S2');addLog('todo_started <em>todo_sc01</em>');});
+  T(2600,()=>{setStage('st-script','done');addLog('todo_finished script');setStage('st-board','running','S3');});
+  T(4600,()=>{setStage('st-board','done');addLog('todo_finished storyboard · 8 shots');setStage('st-asset','running','S4');});
+  // 8 个 asset pip 依次完成,其中第 6 个失败后重试成功
+  const pips=document.querySelectorAll('.pip');let done=0;
+  for(let i=0;i<8;i++){
+    T(4800+i*900,()=>{pips[i].className='pip running';});
+    if(i===5){
+      T(4800+i*900+600,()=>{pips[i].className='pip failed';addLog('todo_failed <em>todo_as06</em> · 退避重试');});
+      T(4800+i*900+1800,()=>{pips[i].className='pip running';});
+      T(4800+i*900+2600,()=>{pips[i].className='pip done';done++;count();});
+    } else {
+      T(4800+i*900+700,()=>{pips[i].className='pip done';done++;count();addLog('asset_generated <em>待审</em>');});
+    }
+  }
+  function count(){document.getElementById('fan-count').textContent=done+'/8 完成';
+    if(done===8){setStage('st-asset','done');
+      const rv=document.getElementById('st-review');
+      rv.querySelector('.tchip').className='tchip t-pend';
+      rv.querySelector('.tchip').textContent='待人工审核';
+      addLog('run_done · 项目转 review');
+      document.getElementById('slate').style.display='none';
+      const b=document.getElementById('proj-badge');
+      document.getElementById('proj-status').textContent='待审核 · 8';
+    }}
+}
+run();
+
+// 审核网格选中态
+document.querySelectorAll('#review .acard').forEach(c=>c.addEventListener('click',()=>{
+  document.querySelectorAll('#review .acard').forEach(x=>x.classList.remove('sel'));
+  c.classList.add('sel');
+}));
+</script>
+</body>
+</html>

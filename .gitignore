@@ -21,3 +21,6 @@
 /llm-agent-builtin/
 /llm-agent-policy/
 /llm-agent-comm/
+/llm-agent-authz/
+/llm-agent-kb/
+/llm-agent-studio/
