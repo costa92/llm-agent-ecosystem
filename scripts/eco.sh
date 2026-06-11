@@ -95,7 +95,7 @@ bootstrap_repo() {
   fi
   if [ -d "$root_dir/$repo/.git" ]; then
     git -C "$root_dir/$repo" pull --ff-only
-    return 0
+    return   # propagate pull status so a resilient caller can continue past it
   fi
   if [ -e "$root_dir/$repo" ]; then
     echo "path exists but is not a git repo: $root_dir/$repo" >&2
@@ -214,11 +214,23 @@ case "$command" in
     done <<<"$targets"
     ;;
   pull)
+    # Resilient sweep: one subproject's failure (e.g. checked out on a branch
+    # whose upstream was deleted) must not abort the rest. Collect failures,
+    # keep going, then summarize; exit non-zero iff at least one repo failed.
     targets="$(normalize_targets "${1:-all}" all_repos)"
+    pull_failures=()
     while IFS= read -r repo; do
       [ -n "$repo" ] || continue
-      bootstrap_repo "$repo"
+      if ! bootstrap_repo "$repo"; then
+        echo "  ⚠️  pull failed: $repo (continuing)" >&2
+        pull_failures+=("$repo")
+      fi
     done <<<"$targets"
+    if [ "${#pull_failures[@]}" -gt 0 ]; then
+      printf '\npull: %d subproject(s) failed: %s\n' \
+        "${#pull_failures[@]}" "${pull_failures[*]}" >&2
+      exit 1
+    fi
     ;;
   status)
     targets="$(normalize_targets "${1:-all}" all_repos)"
