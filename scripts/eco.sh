@@ -20,6 +20,11 @@ all_repos=(
   llm-agent-builtin
   llm-agent-policy
   llm-agent-comm
+  # 案例/应用仓（standalone，不在 go.work；run_go_cmd 已统一 GOWORK=off）
+  llm-agent-authz
+  llm-agent-kb
+  llm-agent-studio
+  llm-agent-console
 )
 
 launchable_repos=(
@@ -45,6 +50,10 @@ repo_url() {
     llm-agent-builtin) printf '%s\n' 'https://github.com/costa92/llm-agent-builtin.git' ;;
     llm-agent-policy) printf '%s\n' 'https://github.com/costa92/llm-agent-policy.git' ;;
     llm-agent-comm) printf '%s\n' 'https://github.com/costa92/llm-agent-comm.git' ;;
+    llm-agent-authz) printf '%s\n' 'https://github.com/costa92/llm-agent-authz.git' ;;
+    llm-agent-kb) printf '%s\n' 'https://github.com/costa92/llm-agent-kb.git' ;;
+    llm-agent-studio) printf '%s\n' 'https://github.com/costa92/llm-agent-studio.git' ;;
+    llm-agent-console) printf '%s\n' 'https://github.com/costa92/llm-agent-console.git' ;;
     *) printf '%s\n' "" ;;
   esac
 }
