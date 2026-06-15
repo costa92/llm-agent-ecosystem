@@ -94,8 +94,28 @@ bootstrap_repo() {
     exit 1
   fi
   if [ -d "$root_dir/$repo/.git" ]; then
-    git -C "$root_dir/$repo" pull --ff-only
-    return   # propagate pull status so a resilient caller can continue past it
+    if git -C "$root_dir/$repo" pull --ff-only; then
+      return 0
+    fi
+    # Pull failed. If the current branch's upstream no longer exists on
+    # origin (post-PR-merge with delete-branch-on-merge), the work is
+    # already on origin/main and there is nothing to pull — this is
+    # normal lifecycle, not a conflict. Tell the user and treat as
+    # success so `make pull` does not abort on the common
+    # "feature branch was just merged and pruned" pattern.
+    local branch remote_name merge_ref upstream_ref
+    branch="$(git -C "$root_dir/$repo" symbolic-ref --short HEAD 2>/dev/null || true)"
+    remote_name="$(git -C "$root_dir/$repo" config "branch.$branch.remote" 2>/dev/null || true)"
+    merge_ref="$(git -C "$root_dir/$repo" config "branch.$branch.merge" 2>/dev/null || true)"
+    if [ -n "$branch" ] && [ "$remote_name" = "origin" ] && [ -n "$merge_ref" ]; then
+      upstream_ref="${merge_ref#refs/heads/}"
+      if [ -n "$upstream_ref" ] \
+         && ! git -C "$root_dir/$repo" rev-parse --verify --quiet "refs/remotes/origin/$upstream_ref" >/dev/null 2>&1; then
+        echo "  note: $repo on '$branch' but 'origin/$upstream_ref' no longer exists (PR merged + delete-branch-on-merge). Run \`cd $repo && git checkout main\` to clean up." >&2
+        return 0
+      fi
+    fi
+    return 1
   fi
   if [ -e "$root_dir/$repo" ]; then
     echo "path exists but is not a git repo: $root_dir/$repo" >&2
