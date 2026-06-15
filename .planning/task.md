@@ -1,0 +1,18 @@
+- [x] Database Schema Migration
+  - [x] Modify `internal/storage/storage.go` to add `prompts` table in `m8Migrations`
+- [x] Backend Go Implementation
+  - [x] Create `internal/prompt/store.go` with Prompt struct and DB operations
+  - [x] Create `internal/httpapi/prompt_handlers.go` with GET/POST/PUT/DELETE handlers
+  - [x] Update `internal/httpapi/httpapi.go` dependencies and routes
+  - [x] Update `cmd/studiod/main.go` to instantiate and inject the prompt store
+- [x] Automated Backend Testing
+  - [x] Create `internal/prompt/store_test.go` and write CRUD integration tests
+  - [x] Create `internal/httpapi/prompt_handlers_test.go` and write HTTP handler tests
+  - [x] Run backend tests to verify correctness
+- [x] Frontend Implementation
+  - [x] Add types in `web/src/lib/types.ts`
+  - [x] Add React Query hooks in `web/src/features/prompt/api.ts`
+  - [x] Create list, add/edit, and delete dialogs in `web/src/features/prompt/PromptListPage.tsx`
+  - [x] Modify `web/src/routes/_authed/orgs.$org.prompt.tsx` to render the new list page
+- [x] Frontend Verification
+  - [x] Build and verify frontend changes
