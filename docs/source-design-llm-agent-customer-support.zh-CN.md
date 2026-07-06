@@ -1,5 +1,7 @@
 # `llm-agent-customer-support` 源码级设计文档（中文）
 
+> **⚠️ 历史快照（截至 2026-05-2x 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖 pin 可能已过时。**更正**：cs 当前 tag 为 **v0.3.0**；其 `go.mod` 除本文所列的 `llm-agent` / `providers` / `otel` / `flow` / `rag` 外，还直接 `require github.com/costa92/llm-agent-contract`（contract 抽取后新增）；文中散见的 pin（如 rag v1.0.5）均已随各仓演进漂移，以当前仓 `go.mod` 为准。生态早已不止「4-repo / 5 个仓库」。
+
 > 本文档基于对 `llm-agent-customer-support/` 子项目（27 个 Go 文件、约 4.1K 行）的端到端源码深读撰写。所有断言均给出 `file:line` 引用，便于读者交叉验证。子项目自我定位是「端到端可部署的客服 demo」，它把整个 4-repo umbrella 装配为可运行姿态：`llm-agent`（agent 核心抽象）+ `llm-agent-providers`（OpenAI/Anthropic/Ollama 适配）+ `llm-agent-otel`（OTel 装饰器）+ `llm-agent-flow`（flow IR）+ `llm-agent-rag`（in-memory 知识库）。
 
 ---

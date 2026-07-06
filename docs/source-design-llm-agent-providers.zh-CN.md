@@ -1,10 +1,12 @@
 # `llm-agent-providers` 源码级设计说明
 
+> **⚠️ 历史快照（截至 2026-05-2x 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖边可能已过时。**重要更正**：本文称 providers 依赖 `github.com/costa92/llm-agent`，这已失效——providers 现只 `require github.com/costa92/llm-agent-contract`（`llm-agent` 边已删）。文中提到的 `llm-agent/llm` 能力接口 / 错误类型现已归属 `llm-agent-contract`（注意：仓内 `internal/contract` 是另一回事，指跨-provider 测试 fixture 抽象，与依赖无关）。
+
 > 仓库根：`/home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/llm-agent-providers/`
 > 子项目规模：36 个 `.go` 文件、约 6.6K 行代码（其中测试 ~2 890 行）
 > 核心包：`anthropic/`、`openai/`、`ollama/`、`deepseek/`、`minimax/`、`internal/contract/`、`internal/compat/`（v0.2.4 新增）、`scripts/`
-> Go 版本：`go 1.26.0`（`llm-agent-providers/go.mod:3`），核心依赖 `github.com/costa92/llm-agent v0.5.1`（`llm-agent-providers/go.mod:7`）
-> 当前 tag：**v0.2.4**（2026-05-23 v1.3 milestone 闭合 — 落地 `internal/compat` 共享 timeout + error 映射，P1-23 + P1-6 同步闭合）。
+> Go 版本：`go 1.26.0`（`llm-agent-providers/go.mod:3`）。**依赖已更正**：现只 `require github.com/costa92/llm-agent-contract`（历史文档编写时为 `github.com/costa92/llm-agent v0.5.1`，该 `llm-agent` 边已删）。
+> 当前 tag：**v0.7.0**（历史文档编写时为 v0.2.4）。
 > 本文档基于源码逐文件深读后撰写；所有断言均带 `file:line` 引用。
 
 ---

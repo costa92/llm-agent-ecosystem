@@ -1,5 +1,7 @@
 # `llm-agent-otel` 子项目源码设计文档（中文版）
 
+> **⚠️ 历史快照（截至 2026-05-21 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖 pin 可能已过时（下方 go.mod pin 区块已就地标注当前值）。otel 当前 tag 为 **v0.4.0**，并已依赖 `llm-agent-flow/v2`。
+
 > 文档版本：2026-05-21  
 > 范围：`llm-agent-otel/` 全部 25 个 `.go` 源文件（约 2.9K 行，含测试）  
 > 阅读姿态：源码级深读 + 系统级设计点评；所有断言均带 `file:line` 锚点
@@ -42,13 +44,15 @@
 依赖关系（依据 `go.mod`）：
 
 ```
-github.com/costa92/llm-agent-otel
-  ├── github.com/costa92/llm-agent v0.5.1
-  ├── github.com/costa92/llm-agent-rag v1.0.1
-  ├── github.com/costa92/llm-agent-flow v0.0.7
+github.com/costa92/llm-agent-otel        # 历史文档编写时的 pin；当前值见括注
+  ├── github.com/costa92/llm-agent          v0.5.1  → 现随 core v0.9.x 演进
+  ├── github.com/costa92/llm-agent-contract         → 现已直接 require（contract 抽取后新增）
+  ├── github.com/costa92/llm-agent-rag      v1.0.1  → 现随 rag v1.11.x（main）演进
+  ├── github.com/costa92/llm-agent-flow     v0.0.7  → 现依赖 root v0.2.x
+  ├── github.com/costa92/llm-agent-flow/v2          → 现已依赖 typed-graph /v2 引擎
   └── go.opentelemetry.io/otel v1.43.0  + exporters/sdk/metric/trace
 ```
-— `go.mod:1-16`
+— `go.mod:1-16`（pin 已漂移；以当前仓 `go.mod` 为准）
 
 注意：核心 `llm-agent` **不依赖**本仓；依赖箭头永远是「应用层依赖 otel 装饰器，装饰器依赖核心」，从而保住核心的 stdlib-only。
 

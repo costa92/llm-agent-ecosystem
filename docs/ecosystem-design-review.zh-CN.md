@@ -1,5 +1,7 @@
 # 生态级设计评审：`llm-agent-ecosystem` v1.1（v1.2 在飞）
 
+> **⚠️ 历史快照（截至 2026-05-21 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖边/子项目数可能已过时。
+
 > 评审日期：2026-05-21
 > 范围：6 个仓库（`llm-agent` / `llm-agent-rag` / `llm-agent-providers` / `llm-agent-otel` / `llm-agent-flow` / `llm-agent-customer-support`）+ umbrella root
 > 输入：六份 `docs/source-design-*.zh-CN.md` 深读文档 + 必要的源码回查

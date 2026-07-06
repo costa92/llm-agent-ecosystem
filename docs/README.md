@@ -1,7 +1,9 @@
 # Docs 索引
 
 > 本目录是 `llm-agent-ecosystem` 的**生态级文档**入口。每个 sibling 仓库的本地文档（README、CHANGELOG、`.planning/`）保留在各自仓库内；本目录只收录跨仓视角与 ecosystem-wide 设计资料。
-> 文档版本：2026-05-21
+> 文档版本：2026-07-06
+>
+> **当前子项目 roster 与依赖方向的权威来源是根 [`README.md`](../README.md)。** 生态已从最初的 6/9 个子项目扩到约 20 个（新增 `llm-agent-contract`、memory 家族全员，以及 `llm-agent-authz` / `llm-agent-kb` / `llm-agent-studio` / `llm-agent-console` 四个应用/案例仓）。本目录的 source-design 深读文档只覆盖其中一个子集（下方 §2.2 的 7 篇），且部分为历史快照——每篇文档顶部的版本日期与横幅会提示其时效。
 
 ---
 
@@ -14,7 +16,7 @@
 | **首读路径**（30 分钟内建立心智模型） | 新人 / reviewer | (1) [`current-project-analysis.zh-CN.md`](./current-project-analysis.zh-CN.md) → (2) [`architecture-and-sequence-diagrams.zh-CN.md`](./architecture-and-sequence-diagrams.zh-CN.md) → (3) [`source-design-umbrella-root.zh-CN.md`](./source-design-umbrella-root.zh-CN.md) |
 | **深读路径**（按子系统逐仓深入） | 贡献者 / 维护者 | (1) [`source-design-llm-agent.zh-CN.md`](./source-design-llm-agent.zh-CN.md) → (2) [`source-design-llm-agent-rag.zh-CN.md`](./source-design-llm-agent-rag.zh-CN.md) → (3) [`source-design-llm-agent-providers.zh-CN.md`](./source-design-llm-agent-providers.zh-CN.md) → (4) [`source-design-llm-agent-otel.zh-CN.md`](./source-design-llm-agent-otel.zh-CN.md) → (5) [`source-design-llm-agent-flow.zh-CN.md`](./source-design-llm-agent-flow.zh-CN.md) → (6) [`source-design-llm-agent-customer-support.zh-CN.md`](./source-design-llm-agent-customer-support.zh-CN.md) |
 | **评审路径**（找设计争议、风险点、改进点） | tech-lead / 架构师 | (1) [`ecosystem-design-review.zh-CN.md`](./ecosystem-design-review.zh-CN.md) → (2) [`subsystems-design-notes.zh-CN.md`](./subsystems-design-notes.zh-CN.md) → (3) `source-design-*` 各文档的 §8 / §9 优化与遗留章节 |
-| **路线图路径**（理解 v1.2 → v1.3 → v2 走向） | 产品/项目管理 | (1) [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) → (2) [`memory-roadmap.zh-CN.md`](./memory-roadmap.zh-CN.md) → (3) [`multi-service-memory-architecture.zh-CN.md`](./multi-service-memory-architecture.zh-CN.md) → (4) [`memory-gateway-api-contract.zh-CN.md`](./memory-gateway-api-contract.zh-CN.md) → (5) [`memory-postgres-outbox-schema.zh-CN.md`](./memory-postgres-outbox-schema.zh-CN.md) → (6) `llm-agent/.planning/STATE.md` + `ROADMAP.md`（核心仓 source of truth）|
+| **路线图路径**（历史演进快照，权威现状见根 README roster） | 产品/项目管理 | (1) [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) → (2) [`memory-roadmap.zh-CN.md`](./memory-roadmap.zh-CN.md) → (3) [`multi-service-memory-architecture.zh-CN.md`](./multi-service-memory-architecture.zh-CN.md) → (4) [`memory-gateway-api-contract.zh-CN.md`](./memory-gateway-api-contract.zh-CN.md) → (5) [`memory-postgres-outbox-schema.zh-CN.md`](./memory-postgres-outbox-schema.zh-CN.md) → (6) `llm-agent/.planning/STATE.md` + `ROADMAP.md`（核心仓 source of truth）|
 
 ### 1.2 文档拓扑
 
@@ -52,6 +54,8 @@ source-design-          source-design-                                   │
 
 ### 2.2 源码级设计（7 篇 source-design-\*）
 
+> 这 7 篇深读文档只覆盖框架早期的一个子集（`llm-agent` / `rag` / `providers` / `otel` / `flow` / `customer-support` / umbrella-root），且多为 2026-05 编写的历史快照。`llm-agent-contract`、memory 家族、以及 `authz` / `kb` / `studio` / `console` 应用仓**尚无**对应 source-design；其权威描述见根 [`README.md`](../README.md) 的 roster 与各自仓库文档。多数 source-design 文档顶部已加历史快照横幅。
+
 | 文档 | 范围 | 长度（行）| 关键章节 |
 |---|---|---|---|
 | [`source-design-umbrella-root.zh-CN.md`](./source-design-umbrella-root.zh-CN.md) | umbrella 根仓（非代码协调点） | ~600 | Makefile / depcheck / B2-B4 / 协调式发布 |
@@ -73,7 +77,7 @@ source-design-          source-design-                                   │
 
 | 文档 | 内容 |
 |---|---|
-| [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) | 重构计划与短/中/长期优化路线（v1.2 → v1.3 → v2） |
+| [`refactor-and-optimization-roadmap.zh-CN.md`](./refactor-and-optimization-roadmap.zh-CN.md) | 重构计划与短/中/长期优化路线（2026-05 历史快照；权威现状见根 README roster） |
 | [`memory-roadmap.zh-CN.md`](./memory-roadmap.zh-CN.md) | `llm-agent/memory/` 的专项优化路线图，拆分 `v0.x` 加法改动与 `v1/v2` breaking change，并附阶段风险与验收标准 |
 | [`memory-gateway-api-contract.zh-CN.md`](./memory-gateway-api-contract.zh-CN.md) | 多服务 `Memory Gateway` 的 API 契约草案，覆盖 recall、write、manage、forget/delete、版本与幂等约束 |
 | [`memory-postgres-outbox-schema.zh-CN.md`](./memory-postgres-outbox-schema.zh-CN.md) | 多服务 memory 的 `Postgres + Transactional Outbox` 表结构草案，覆盖真相源、事件流、幂等、并发控制与失效传播辅助模型 |
@@ -168,4 +172,4 @@ PR review 时，**必须**同步本目录文档的场景：
 
 ---
 
-> 本目录最后维护：2026-05-21（v1.1 close + v1.2 in flight + 6 篇 source-design 深读完工）。下次维护触发点：v1.2 milestone close 或任一 sibling 进入新 minor。
+> 本目录最后维护：2026-07-06（对齐扩展后的 ~20 仓 roster；为存活的深度设计快照补历史横幅）。权威现状始终以根 [`README.md`](../README.md) 的 roster 与依赖图为准；本目录 source-design 深读为按需更新的历史快照。

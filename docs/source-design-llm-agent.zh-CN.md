@@ -1,7 +1,9 @@
 # `llm-agent` 子项目源码级设计
 
+> **⚠️ 历史快照（截至 2026-05-2x 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖边/子项目数可能已过时。**重要更正**：本文多处称核心 `go.mod` "zero direct requires / go.sum 为空"，这已失效——contract 抽取完成后，核心唯一 `require` 是 `github.com/costa92/llm-agent-contract`（当前 v0.6.0，本身 stdlib-only），因此正确表述是「core + contract 合起来是 stdlib-only 闭包」，而非核心零 require。核心当前 tag 为 v0.9.0。
+
 > 仓库路径：`llm-agent-ecosystem/llm-agent/`
-> 当前版本：`v0.6.1`（v1.2 Core Capability Deepening 在飞行中）
+> 当前版本：`v0.9.0`（历史文档编写时为 `v0.6.1`）
 > 代码规模：约 159 个 `.go` 文件、~24.5K 行（含测试 ~12K 行非测试源码）
 > 文档对应代码快照：2026-05-21
 
@@ -13,7 +15,7 @@
 
 **硬约束 / Keystone 决策**（写在 `llm-agent/CLAUDE.md` 与 umbrella `README.md`，并由 CI 门禁强制）：
 
-1. **核心 `llm-agent` 必须 stdlib-only**。P0-2 落地（2026-05-22，commit 6029565）后，`go.mod` 已无任何反向边，`go.sum` 为空；B4 stdlib-only assertion gate 现断言"zero direct requires"（详见 §9.2 历史与当前态）。
+1. **核心 `llm-agent` 必须 stdlib-only**。P0-2 落地（2026-05-22，commit 6029565）后，`go.mod` 已无 `llm-agent-rag` 反向边。**其后 contract 抽取完成**：核心现唯一 `require github.com/costa92/llm-agent-contract`（本身 stdlib-only），因此「core + contract」合起来是 stdlib-only 闭包——并非核心零 require、go.sum 为空。B4 gate 现断言"除 contract 外无其他直接 require，且 transitive dep 集为 stdlib + llm-agent + llm-agent-contract"（详见 §9.2 历史与当前态）。
 2. **无 K8s / Helm**：生态范围常驻非目标。
 3. **不允许在 tag 分支保留 `replace`**：CI 门禁 `INFRA-04` 强制。
 4. **`go.work` 一律 `.gitignore`**：CI 跑 `GOWORK=off`。
@@ -373,11 +375,11 @@ Semantic  = (vec×0.7 + tag_overlap×0.3) ×          (0.8 + importance×0.4)
 **当前实现状态**（v0.6.1，2026-05-23）：
 
 - `llm-agent/rag/` 目录已移除（P0-2，commit 6029565）。
-- `llm-agent/go.mod` 不再 `require github.com/costa92/llm-agent-rag`；`go.sum` 为空。
+- `llm-agent/go.mod` 不再 `require github.com/costa92/llm-agent-rag`。（**更正**：contract 抽取后 `go.sum` 已非空——核心现 `require github.com/costa92/llm-agent-contract`，这是它唯一的 require。）
 - 没有任何源码 import `llm-agent-rag`；`grep -rn 'llm-agent-rag' llm-agent/` 仅在 doc 注释里出现。
 - 下游 `customer-support` 在用 rag 时继续直接 `import "github.com/costa92/llm-agent-rag/rag"`（与历史行为一致）。
 
-**结论**：v1.1 时期声称的"唯一允许的反向边"已撤销。核心仓 `llm-agent` 现严格 stdlib-only — B4 stdlib-only assertion gate 已切到 "zero direct requires"（详见 §9 与 `docs/ecosystem-design-review.zh-CN.md` §4.5）。
+**结论**：v1.1 时期声称的"唯一允许的反向边"已撤销。核心仓 `llm-agent` 保持 stdlib-only——**唯一** direct require 是 `llm-agent-contract`（本身 stdlib-only），「core + contract」是 stdlib-only 闭包。B4 gate 断言"除 contract 外无其他直接 require"（详见 §9 与 `docs/ecosystem-design-review.zh-CN.md` §4.5）。
 
 ### 4.7 Streaming Event Model（K1 keystone）
 
