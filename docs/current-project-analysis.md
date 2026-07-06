@@ -1,5 +1,9 @@
 # Current Project Analysis
 
+> Doc version: 2026-07-06. The authoritative subproject roster and dependency
+> directions live in the root [`README.md`](../README.md); this analysis is a
+> narrative companion and covers a representative subset of the family in depth.
+
 ## Overview
 
 This repository is an umbrella workspace for the `llm-agent` ecosystem.
@@ -10,14 +14,21 @@ logic. Its role is to provide:
 - shared conventions and dependency direction
 - ecosystem-level planning and release coordination
 
-The actual product and library functionality lives in five independent
-subprojects:
+The actual product and library functionality lives in roughly twenty
+independent subprojects. This analysis walks through the core framework family
+in depth; the full roster (framework repos plus the `llm-agent-authz` /
+`llm-agent-kb` / `llm-agent-studio` / `llm-agent-console` application repos) is
+in the root [`README.md`](../README.md). The framework repos covered below:
 
-- `llm-agent`
+- `llm-agent` (core framework)
+- `llm-agent-contract` (stdlib-only LLM-provider contract)
 - `llm-agent-rag`
 - `llm-agent-providers`
 - `llm-agent-otel`
+- `llm-agent-flow` (root IR/DAG executor + `/v2` typed-graph engine)
 - `llm-agent-customer-support`
+- the memory family (`llm-agent-memory` `/v2` + contract/postgres/gateway/worker/client)
+- the extracted `llm-agent-builtin` / `llm-agent-policy` / `llm-agent-comm` siblings
 
 ## Ecosystem Structure
 
@@ -36,21 +47,31 @@ server, and no central package that all code is implemented inside.
 
 ### Dependency direction
 
-The implemented dependency direction is:
+The implemented dependency direction (verified against each repo's `go.mod`;
+see the root [`README.md`](../README.md) "Dependency direction" section for the
+authoritative graph) is:
 
-- `llm-agent-customer-support` depends on `llm-agent`,
-  `llm-agent-providers`, and `llm-agent-otel`
-- `llm-agent-otel` depends on `llm-agent` and `llm-agent-rag`
-- `llm-agent-providers` depends on `llm-agent`
-- `llm-agent` depends on `llm-agent-rag` only for the RAG facade
-- `llm-agent-rag` is the lowest-level retrieval package in the stack
+- `llm-agent-customer-support` depends on `llm-agent`, `llm-agent-contract`,
+  `llm-agent-providers`, `llm-agent-otel`, `llm-agent-flow`, and `llm-agent-rag`
+- `llm-agent-otel` depends on `llm-agent`, `llm-agent-contract`,
+  `llm-agent-rag`, and `llm-agent-flow` (+ `/v2`)
+- `llm-agent-providers` depends on `llm-agent-contract` only (the earlier
+  `llm-agent` edge was dropped)
+- `llm-agent` depends on `llm-agent-contract` only — its single `require`. Core
+  no longer ships a RAG facade (the `llm-agent → llm-agent-rag` back-edge was
+  removed in P0-2, 2026-05-21). "Core + contract" is the stdlib-only closure.
+- `llm-agent-contract` depends on nothing (stdlib-only)
+- `llm-agent-rag` is the fixed-point retrieval SDK the framework aligns to; it
+  requires `llm-agent-contract` (its opt-in `adapter/llmagent` subpackage also
+  pulls `llm-agent`)
 
 This creates a layered architecture:
 
-1. foundation: `llm-agent-rag`
-2. core agent abstraction: `llm-agent`
-3. integration layers: `llm-agent-providers`, `llm-agent-otel`
-4. reference application: `llm-agent-customer-support`
+1. contract: `llm-agent-contract` (stdlib-only, the shared LLM-provider seam)
+2. core agent abstraction: `llm-agent` (contract-only require)
+3. retrieval fixed point: `llm-agent-rag`
+4. integration layers: `llm-agent-providers`, `llm-agent-otel`, `llm-agent-flow`
+5. reference application: `llm-agent-customer-support`
 
 ## Subproject Analysis
 
@@ -193,7 +214,9 @@ Strong signals:
 - extensive tests across retrieval, graph, storage, and evaluation layers
 - API snapshot file and compatibility docs
 - explicit conformance tests for backends
-- stable `v1.0` positioning in README
+- stable, additive `v1.x` positioning (now at v1.11.0 on `main`; the branch was
+  renamed `master → main`, and v1 stays additive-only with breaking changes
+  reserved for a `/v2` module path)
 
 Current maturity assessment:
 
@@ -206,7 +229,9 @@ Current maturity assessment:
 ### Role
 
 `llm-agent-providers` is the provider adapter repository. It converts concrete
-vendor APIs into the interfaces defined by `llm-agent/llm`.
+vendor APIs into the `ChatModel` / capability interfaces defined by
+`llm-agent-contract` (its only require; the earlier `llm-agent` edge was
+dropped).
 
 ### Public capability surface
 

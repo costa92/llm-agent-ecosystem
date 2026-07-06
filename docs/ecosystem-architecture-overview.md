@@ -1,9 +1,12 @@
 # Ecosystem Architecture Overview
 
-> Document version: 2026-05-28
-> Code snapshot: 2026-05-28
+> Document version: 2026-07-06 (roster + dependency directions refreshed)
+> Code snapshot: 2026-05-28 for the call-chain sections (§5–§6); the roster and
+> dependency graph below are current as of 2026-07-06.
 > Reading goal: build a correct mental model of `llm-agent-ecosystem` in
 > about 30 minutes, then continue down the main source-code paths.
+> The authoritative roster and dependency graph live in the root
+> [`README.md`](../README.md); this overview is the annotated companion.
 
 ---
 
@@ -16,19 +19,34 @@ umbrella workspace**. The root repo itself is responsible only for:
 - ecosystem-wide dependency direction and rules
 - documentation navigation and planning entrypoints
 
-The real functionality is implemented across 9 subprojects:
+The real functionality is implemented across roughly twenty subprojects. This
+overview walks the framework family in depth; the full roster (including the
+application repos) lives in the root [`README.md`](../README.md):
 
 ```text
 llm-agent-ecosystem/
-├── llm-agent                     # core agent framework
-├── llm-agent-rag                 # standalone RAG SDK
-├── llm-agent-providers           # model-provider adapter layer
+├── llm-agent                     # core agent framework (contract-only require)
+├── llm-agent-contract            # stdlib-only LLM-provider contract (ChatModel + capabilities)
+├── llm-agent-rag                 # standalone RAG SDK (additive v1.x on main)
+├── llm-agent-providers           # model-provider adapter layer (contract-only)
 ├── llm-agent-otel                # OTel wrappers
 ├── llm-agent-customer-support    # reference customer-support service
-├── llm-agent-flow                # serializable DAG/Flow runtime
-├── llm-agent-memory              # memory SDK extension layer
+├── llm-agent-flow                # serializable DAG/Flow runtime (root) + /v2 typed-graph engine
+├── llm-agent-builtin             # ready-to-use agent Tools
+├── llm-agent-policy              # ChatModel policy decorator
+├── llm-agent-comm                # inter-agent comm: base + A2A + MCP
+├── llm-agent-memory              # durable memory abstractions (/v2 module, contract-backed)
+├── llm-agent-memory-contract     # backend-neutral durable contract
 ├── llm-agent-memory-postgres     # durable memory Postgres backend
-└── llm-agent-memory-gateway      # durable memory HTTP gateway
+├── llm-agent-memory-gateway      # durable memory HTTP gateway
+├── llm-agent-memory-worker       # async consolidation worker
+├── llm-agent-memory-client       # stdlib-only HTTP client for the gateway
+│
+│   # Applications & case-study services (consume the framework family)
+├── llm-agent-authz               # importable multi-tenant authz library
+├── llm-agent-kb                  # enterprise GraphRAG knowledge-base platform
+├── llm-agent-studio              # AI Studio — visual workflow orchestration
+└── llm-agent-console             # unified ops console (HTTP-only BFF)
 ```
 
 Useful root entrypoints:
@@ -48,29 +66,40 @@ The ecosystem is easiest to understand as four layers:
 Coordination layer
   llm-agent-ecosystem(root)
 
+Contract layer
+  llm-agent-contract          (stdlib-only LLM-provider seam)
+  llm-agent-memory-contract   (stdlib-only durable-memory seam)
+
 Core capability layer
-  llm-agent
+  llm-agent                   (contract-only require)
   llm-agent-rag
-  llm-agent-memory
+  llm-agent-memory (/v2)      (contract-backed; no longer depends on core)
 
 Infrastructure layer
   llm-agent-providers
   llm-agent-otel
-  llm-agent-flow
+  llm-agent-flow (root + /v2)
+  llm-agent-builtin / llm-agent-policy / llm-agent-comm
   llm-agent-memory-postgres
   llm-agent-memory-gateway
+  llm-agent-memory-worker
+  llm-agent-memory-client
 
 Application layer
   llm-agent-customer-support
+  llm-agent-authz / llm-agent-kb / llm-agent-studio / llm-agent-console
 ```
 
 ### 2.1 Dependency Direction
 
-The implemented dependency direction can be summarized as:
+The implemented dependency direction (verified against each repo's `go.mod`
+direct requires; the root [`README.md`](../README.md) "Dependency direction"
+section is authoritative) can be summarized as:
 
 ```text
 llm-agent-customer-support
   -> llm-agent
+  -> llm-agent-contract
   -> llm-agent-providers
   -> llm-agent-otel
   -> llm-agent-flow
@@ -78,34 +107,61 @@ llm-agent-customer-support
 
 llm-agent-otel
   -> llm-agent
+  -> llm-agent-contract
   -> llm-agent-rag
-  -> llm-agent-flow
+  -> llm-agent-flow (+ /v2)
 
 llm-agent-providers
-  -> llm-agent
+  -> llm-agent-contract          (contract-only now; the llm-agent edge was dropped)
 
 llm-agent-flow
   -> llm-agent
+  -> llm-agent-flow/v2 (+ llm-agent-contract, indirect)
+
+llm-agent
+  -> llm-agent-contract          (its only require; core + contract = stdlib-only closure)
+
+llm-agent-contract
+  -> (nothing — stdlib only)
+
+llm-agent-rag
+  -> llm-agent-contract          (the opt-in adapter/llmagent subpackage also pulls llm-agent)
+
+llm-agent-memory (/v2)
+  -> llm-agent-contract          (contract-backed; the llm-agent edge was removed in the /v2 inversion)
 
 llm-agent-memory-postgres
-  -> llm-agent-memory
+  -> llm-agent-memory-contract
 
 llm-agent-memory-gateway
-  -> llm-agent-memory
+  -> llm-agent-memory-contract
   -> llm-agent-memory-postgres
   -> llm-agent-rag
+
+llm-agent-memory-worker
+  -> llm-agent-memory-contract
+  -> llm-agent-memory-postgres
 ```
 
 ### 2.2 Core Design Principles
 
-- `llm-agent` stays stdlib-only and does not pull third-party deps.
+- `llm-agent` stays stdlib-only: its only `require` is `llm-agent-contract`
+  (itself stdlib-only), so "core + contract" is a stdlib-only closure. No
+  third-party deps, no RAG facade back-edge (removed in P0-2, 2026-05-21).
+- The LLM-provider contract (`ChatModel` + capability interfaces) lives in the
+  standalone `llm-agent-contract` module; providers, otel, rag, and core all
+  align to it.
 - Model integration uses "smallest possible interface + optional capability"
   seams.
 - OTel is attached through decorators rather than hooks into the core.
 - `llm-agent-rag` is a fixed point and compatibility anchor for downstreams.
-- Durable memory uses a truth-source + outbox + relay + projection model.
+- Durable memory uses a truth-source + outbox + relay + projection model, and
+  the memory cluster is contract-backed (`llm-agent-memory-contract`) with the
+  `/v2` inversion removing the old dependency on core.
 - `flow` and `StateGraph` have distinct roles: the former is a persisted DAG
-  runtime, the latter is an in-process typed state machine.
+  runtime (root module) that also ships a typed-graph `/v2` engine with
+  streaming and checkpoint/resume; the latter is an in-process typed state
+  machine in core.
 
 ---
 
@@ -151,7 +207,8 @@ Key files:
 ### 3.3 `llm-agent-providers`
 
 The model-provider adapter layer. It connects concrete vendor APIs to the
-`llm-agent/llm` abstractions.
+`ChatModel` / capability abstractions defined in `llm-agent-contract` (its only
+require; the earlier `llm-agent` edge was dropped).
 
 Current provider coverage:
 
@@ -208,13 +265,17 @@ Key files:
 
 ### 3.6 `llm-agent-flow`
 
-The serializable DAG/Flow runtime. It provides:
+The serializable DAG/Flow runtime. The stable root module (v0.2.0) provides:
 
 - JSON Flow IR
 - DAG validate / compile / run
 - topological-layer parallel execution
 - event streams
 - `flowd` as a persisted HTTP runtime
+
+It also ships a typed-graph `/v2` engine (v2.2.0) that adds streaming,
+checkpoint/resume, loop constructs, and durable run state — the successor
+runtime, versioned as a separate `/v2` module path alongside the root.
 
 Key files:
 
@@ -224,7 +285,9 @@ Key files:
 
 ### 3.7 `llm-agent-memory`
 
-The memory SDK extension layer. It provides:
+The durable memory abstractions + manager surface, now a `/v2` module
+(v2.0.0) that is contract-backed: it depends only on `llm-agent-contract`, not
+on `llm-agent` core (the `/v2` inversion removed that edge). It provides:
 
 - capability-interface-typed manager
 - unified search
@@ -287,7 +350,7 @@ Read:
 Goal:
 
 - understand that this is not a single-repo product
-- understand the responsibilities of the 9 subprojects
+- understand the responsibilities of the ~20 subprojects (roster in the root README)
 
 ### Step 2: understand the core abstractions
 

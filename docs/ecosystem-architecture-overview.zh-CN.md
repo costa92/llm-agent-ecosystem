@@ -1,8 +1,10 @@
 # 生态架构总览
 
-> 文档版本：2026-05-28
-> 对应代码快照：2026-05-28
+> 文档版本：2026-07-06（roster 与依赖方向已刷新）
+> 对应代码快照：调用链章节（§5–§6）为 2026-05-28；下方 roster 与依赖图为
+> 2026-07-06 现状。
 > 阅读目标：在 30 分钟内建立 `llm-agent-ecosystem` 的正确心智模型，并能继续沿源码主链深入。
+> roster 与依赖图的权威来源是根 [`README.md`](../README.md)；本总览是配套注解。
 
 ---
 
@@ -14,19 +16,33 @@
 - 生态级依赖方向和规则
 - 文档导航与规划入口
 
-真正的功能实现分布在 9 个子项目中：
+真正的功能实现分布在约 20 个子项目中。本总览深读框架家族；完整 roster（含应用
+仓）见根 [`README.md`](../README.md)：
 
 ```text
 llm-agent-ecosystem/
-├── llm-agent                     # 核心 agent 框架
-├── llm-agent-rag                 # 独立 RAG SDK
-├── llm-agent-providers           # 模型供应商适配层
+├── llm-agent                     # 核心 agent 框架（只 require contract）
+├── llm-agent-contract            # stdlib-only 的 LLM-provider 契约（ChatModel + capability）
+├── llm-agent-rag                 # 独立 RAG SDK（main 上 additive v1.x）
+├── llm-agent-providers           # 模型供应商适配层（只 require contract）
 ├── llm-agent-otel                # OTel 装饰器
 ├── llm-agent-customer-support    # 参考客服服务
-├── llm-agent-flow                # 可序列化 DAG/Flow runtime
-├── llm-agent-memory              # memory SDK 扩展层
+├── llm-agent-flow                # 可序列化 DAG/Flow runtime（root）+ /v2 typed-graph 引擎
+├── llm-agent-builtin             # 开箱即用的 agent Tool
+├── llm-agent-policy              # ChatModel policy 装饰器
+├── llm-agent-comm                # inter-agent 通信：base + A2A + MCP
+├── llm-agent-memory              # durable memory 抽象（/v2 模块，contract-backed）
+├── llm-agent-memory-contract     # backend-neutral 的 durable 契约
 ├── llm-agent-memory-postgres     # durable memory 的 Postgres 后端
-└── llm-agent-memory-gateway      # durable memory 的 HTTP 网关
+├── llm-agent-memory-gateway      # durable memory 的 HTTP 网关
+├── llm-agent-memory-worker       # 异步 consolidation worker
+├── llm-agent-memory-client       # 网关的 stdlib-only HTTP 客户端
+│
+│   # 应用与案例服务（消费框架家族）
+├── llm-agent-authz               # 可导入的多租户 authz 库
+├── llm-agent-kb                  # 企业级 GraphRAG 知识库平台
+├── llm-agent-studio              # AI Studio — 可视化工作流编排
+└── llm-agent-console             # 统一运维控制台（HTTP-only BFF）
 ```
 
 根仓入口可参考：
@@ -46,29 +62,39 @@ llm-agent-ecosystem/
 生态协调层
   llm-agent-ecosystem(root)
 
+契约层
+  llm-agent-contract          (stdlib-only 的 LLM-provider seam)
+  llm-agent-memory-contract   (stdlib-only 的 durable-memory seam)
+
 核心能力层
-  llm-agent
+  llm-agent                   (只 require contract)
   llm-agent-rag
-  llm-agent-memory
+  llm-agent-memory (/v2)      (contract-backed；不再依赖 core)
 
 基础设施层
   llm-agent-providers
   llm-agent-otel
-  llm-agent-flow
+  llm-agent-flow (root + /v2)
+  llm-agent-builtin / llm-agent-policy / llm-agent-comm
   llm-agent-memory-postgres
   llm-agent-memory-gateway
+  llm-agent-memory-worker
+  llm-agent-memory-client
 
 应用层
   llm-agent-customer-support
+  llm-agent-authz / llm-agent-kb / llm-agent-studio / llm-agent-console
 ```
 
 ### 2.1 依赖方向
 
-当前实际依赖方向可压缩成：
+当前实际依赖方向（对照各仓 `go.mod` 直接 require；权威依赖图见根
+[`README.md`](../README.md) 的「Dependency direction」节）可压缩成：
 
 ```text
 llm-agent-customer-support
   -> llm-agent
+  -> llm-agent-contract
   -> llm-agent-providers
   -> llm-agent-otel
   -> llm-agent-flow
@@ -76,36 +102,62 @@ llm-agent-customer-support
 
 llm-agent-otel
   -> llm-agent
+  -> llm-agent-contract
   -> llm-agent-rag
-  -> llm-agent-flow
+  -> llm-agent-flow (+ /v2)
 
 llm-agent-providers
-  -> llm-agent
+  -> llm-agent-contract          (现在只 require contract；llm-agent 边已删)
 
 llm-agent-flow
   -> llm-agent
+  -> llm-agent-flow/v2 (+ llm-agent-contract，间接)
+
+llm-agent
+  -> llm-agent-contract          (唯一 require；core + contract = stdlib-only 闭包)
+
+llm-agent-contract
+  -> (无 —— 纯 stdlib)
+
+llm-agent-rag
+  -> llm-agent-contract          (可选的 adapter/llmagent 子包会另外拉 llm-agent)
+
+llm-agent-memory (/v2)
+  -> llm-agent-contract          (contract-backed；/v2 倒置已删掉 llm-agent 边)
 
 llm-agent-memory-postgres
-  -> llm-agent-memory
+  -> llm-agent-memory-contract
 
 llm-agent-memory-gateway
-  -> llm-agent-memory
+  -> llm-agent-memory-contract
   -> llm-agent-memory-postgres
   -> llm-agent-rag
+
+llm-agent-memory-worker
+  -> llm-agent-memory-contract
+  -> llm-agent-memory-postgres
 ```
 
 ### 2.2 核心设计原则
 
-- `llm-agent` 保持 stdlib-only，不引入第三方依赖。
+- `llm-agent` 保持 stdlib-only：唯一 `require` 是 `llm-agent-contract`（本身
+  stdlib-only），因此「core + contract」是一个 stdlib-only 闭包。无第三方依赖，
+  也不再有 RAG facade 回接边（P0-2 于 2026-05-21 移除）。
+- LLM-provider 契约（`ChatModel` + capability 接口）落在独立的
+  `llm-agent-contract` 模块；providers、otel、rag、core 都对齐到它。
 - 模型能力采用“最小接口 + 可选 capability”设计。
 - OTel 一律通过 decorator 注入，不侵入核心抽象。
 - `llm-agent-rag` 是 RAG 固定点，承担下游兼容性锚点角色。
-- durable memory 采用 truth source + outbox + relay + projection 架构。
-- `flow` 与 `StateGraph` 分工明确：前者面向持久化 DAG runtime，后者面向进程内状态机。
+- durable memory 采用 truth source + outbox + relay + projection 架构，memory
+  集群已 contract-backed（`llm-agent-memory-contract`），`/v2` 倒置移除了对
+  core 的旧依赖。
+- `flow` 与 `StateGraph` 分工明确：前者是持久化 DAG runtime（root 模块），并额外
+  提供带 streaming 与 checkpoint/resume 的 typed-graph `/v2` 引擎；后者是 core
+  内的进程内状态机。
 
 ---
 
-## 3. 9 个子项目分别实现了什么
+## 3. 各子项目分别实现了什么
 
 ### 3.1 `llm-agent`
 
@@ -146,7 +198,8 @@ llm-agent-memory-gateway
 
 ### 3.3 `llm-agent-providers`
 
-模型供应商适配层，负责把具体厂商 API 接入 `llm-agent/llm` 抽象。
+模型供应商适配层，负责把具体厂商 API 接入 `llm-agent-contract` 定义的
+`ChatModel` / capability 抽象（唯一 require；早期的 `llm-agent` 边已删）。
 
 当前覆盖：
 
@@ -200,13 +253,16 @@ OpenTelemetry 装饰层，负责给：
 
 ### 3.6 `llm-agent-flow`
 
-可序列化 DAG/Flow runtime，负责：
+可序列化 DAG/Flow runtime。稳定的 root 模块（v0.2.0）负责：
 
 - JSON Flow IR
 - DAG validate / compile / run
 - topological-layer 并发执行
 - event stream
 - `flowd` 持久化 HTTP 服务
+
+此外还提供 typed-graph `/v2` 引擎（v2.2.0），补齐 streaming、checkpoint/resume、
+Loop 构造与 durable run 状态——作为独立 `/v2` 模块路径与 root 并存的后继 runtime。
 
 关键文件：
 
@@ -216,7 +272,8 @@ OpenTelemetry 装饰层，负责给：
 
 ### 3.7 `llm-agent-memory`
 
-memory SDK 扩展层，负责：
+durable memory 抽象 + manager 层，现已是 `/v2` 模块（v2.0.0）且 contract-backed：
+只依赖 `llm-agent-contract`，不再依赖 `llm-agent` core（`/v2` 倒置已移除该边）。负责：
 
 - capability-interface 化 manager
 - unified search
@@ -279,7 +336,7 @@ durable memory 的治理型 HTTP 网关，负责：
 目标：
 
 - 理解这不是单仓产品
-- 知道 9 个子项目的职责边界
+- 知道约 20 个子项目的职责边界（roster 见根 README）
 
 ### 第 2 步：看核心抽象
 

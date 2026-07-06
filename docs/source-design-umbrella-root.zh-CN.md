@@ -1,5 +1,10 @@
 # Umbrella Root 源码级设计说明
 
+> **⚠️ 历史快照（截至 2026-05-27 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**。本文多处的硬事实已失效，请注意：
+> - **子项目数**：文中反复出现的「9 个 sibling」已过时——框架家族 + 应用仓共约 20 个（roster 见根 README）。
+> - **核心 require**：文中 depcheck 示例把 `llm-agent` 的 pins 标为「(none)」——已失效。contract 抽取后，核心唯一 `require` 是 `github.com/costa92/llm-agent-contract`（core + contract = stdlib-only 闭包）。
+> - **CI 闸子**：文中称 umbrella CI 只有「B2 / B3 / B4」（3 个 job）——已失效。当前 `umbrella.yml` 跑 4 个 job：`cross-repo-build`（内含 depcheck，即旧 B3）、**B2**（flowd smoke）、**B4**（stdlib-only）、**B5**（PII/injection regex parity：policy↔rag）、**B6**（promotion policy parity：worker↔gateway）。§6 只描述到 B4。
+
 > 仓库路径：`/home/hellotalk/code/go/src/github.com/costa92/llm-agent-ecosystem/`
 > 文档版本：2026-05-27
 > 阅读对象：想搞清楚"为什么这里有 9 个子目录但根本身没有 `go.mod` 主模块"的开发者；进入跨仓 change 之前希望先理解 umbrella 协调机制的 reviewer / 运维。
@@ -14,7 +19,7 @@
 3. [Makefile 设计](#3-makefile-设计)
 4. [`cmd/depcheck` 工具](#4-cmddepcheck-工具)
 5. [`go.work` 与 `GOWORK=off` 规则](#5-gowork-与-gowork-off-规则)
-6. [B2 / B3 / B4 CI 闸子](#6-b2--b3--b4-ci-闸子)
+6. [CI 闸子（B2 / B4 / B5 / B6 + cross-repo-build）](#6-ci-闸子b2--b4--b5--b6--cross-repo-build)
 7. [依赖方向与硬约束](#7-依赖方向与硬约束)
 8. [协调式发布流程（Phase 33 模式）](#8-协调式发布流程phase-33-模式)
 9. [`.planning/` 关系与 STATE / ROADMAP / REQUIREMENTS](#9-planning-关系与-state--roadmap--requirements)
@@ -178,6 +183,7 @@ Makefile 总共 40 行，没有任何 recipe 逻辑 — 所有真实工作在 `s
 CASCADE ORDER (bump leaves first):
   1. llm-agent-rag                latest:v1.0.5   pins: (no in-ecosystem deps)
   2. llm-agent                    latest:v0.6.1   pins: (none — P0-2 dropped rag back-edge)
+     # 更正：此为 2026-05 快照。contract 抽取后，llm-agent 现 pins: llm-agent-contract（唯一 require），非 (none)。
   3. llm-agent-providers          latest:v0.2.4   pins: llm-agent@v0.5.1
   4. llm-agent-flow               latest:v0.1.4   pins: llm-agent@v0.5.1
   5. llm-agent-otel               latest:v0.2.2   pins: llm-agent@v0.5.1, llm-agent-rag@v1.0.1, llm-agent-flow@v0.0.7
@@ -265,18 +271,22 @@ GOWORK=off go run . --root /custom/path  # 显式 root
 
 ---
 
-## 6. B2 / B3 / B4 CI 闸子
+## 6. CI 闸子（B2 / B4 / B5 / B6 + cross-repo-build）
+
+> **更正（当前态）**：下表是历史快照，只覆盖到 B4。当前 `umbrella.yml` 已新增两个 parity 硬门：**B5**（PII/injection regex parity，policy↔rag，`scripts/regex-parity-check.sh`）与 **B6**（promotion policy parity，worker↔gateway，`scripts/promotion-policy-parity-check.sh`）。旧「B3」现是 `cross-repo-build` job 内的 depcheck step，并非独立 job。
 
 ### 6.1 闸子总览
 
-`.github/workflows/umbrella.yml` 共 3 个 job：
+`.github/workflows/umbrella.yml`（历史快照，另见上方更正）：
 
 | Job 名 | 闸子代号 | 路径 | 角色 |
 |---|---|---|---|
-| `cross-repo-build` | — | `umbrella.yml:14-103` | 5 sibling 单独 checkout，跑 `GOWORK=off go vet/build/test` |
+| `cross-repo-build` | — | `umbrella.yml:14-103` | 每个 sibling 单独 checkout，跑 `GOWORK=off go vet/build/test`（历史文档写「5 sibling」，现覆盖全部框架 sibling） |
 | `cross-repo-build > "B3 — depcheck cascade tool"` step | **B3** | `umbrella.yml:105-121` | depcheck JSON artifact，**informational**，不 fail PR |
 | `smoke` | **B2** | `umbrella.yml:123-191` | build `flowd` 二进制，启动后探 `/healthz` `/flows`，验证 binary 可启动 |
 | `stdlib-only-gate` | **B4** | `umbrella.yml:193-214` | 跑 `scripts/stdlib-only-check.sh`，硬门 |
+| `regex-parity` | **B5** | 当前 `umbrella.yml` | PII/injection regex parity（policy↔rag），硬门 |
+| `promotion-policy-parity` | **B6** | 当前 `umbrella.yml` | promotion policy parity（worker↔gateway），硬门 |
 
 ### 6.2 B2 — flowd 二进制冒烟门
 

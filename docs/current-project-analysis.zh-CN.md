@@ -1,5 +1,9 @@
 # 当前项目分析
 
+> 文档版本：2026-07-06。子项目 roster 与依赖方向的权威来源是根
+> [`README.md`](../README.md)；本文是配套的叙事说明，深读覆盖框架家族的一个
+> 代表性子集。
+
 ## 概览
 
 这个仓库是 `llm-agent` 生态的总工作区。根仓本身不是产品运行时，也
@@ -9,13 +13,19 @@
 - 维护共享约定和依赖方向
 - 承担跨仓规划与发布协同
 
-真正的产品能力和库能力分布在 5 个独立子项目中：
+真正的产品能力和库能力分布在约 20 个独立子项目中。本文深读框架核心家族；完整
+roster（框架仓 + `llm-agent-authz` / `llm-agent-kb` / `llm-agent-studio` /
+`llm-agent-console` 应用仓）见根 [`README.md`](../README.md)。下文覆盖的框架仓：
 
-- `llm-agent`
+- `llm-agent`（核心框架）
+- `llm-agent-contract`（stdlib-only 的 LLM-provider 契约）
 - `llm-agent-rag`
 - `llm-agent-providers`
 - `llm-agent-otel`
+- `llm-agent-flow`（根 IR/DAG 执行器 + `/v2` typed-graph 引擎）
 - `llm-agent-customer-support`
+- memory 家族（`llm-agent-memory` `/v2` + contract/postgres/gateway/worker/client）
+- 从 core 拆出的 `llm-agent-builtin` / `llm-agent-policy` / `llm-agent-comm`
 
 ## 生态结构
 
@@ -34,21 +44,28 @@
 
 ### 依赖方向
 
-当前实际依赖关系是：
+当前实际依赖关系（对照各仓 `go.mod` 直接 require；权威依赖图见根
+[`README.md`](../README.md) 的「Dependency direction」节）：
 
-- `llm-agent-customer-support` 依赖 `llm-agent`、
-  `llm-agent-providers` 和 `llm-agent-otel`
-- `llm-agent-otel` 依赖 `llm-agent` 和 `llm-agent-rag`
-- `llm-agent-providers` 依赖 `llm-agent`
-- `llm-agent` 只通过 RAG facade 依赖 `llm-agent-rag`
-- `llm-agent-rag` 位于整个栈的最底层
+- `llm-agent-customer-support` 依赖 `llm-agent`、`llm-agent-contract`、
+  `llm-agent-providers`、`llm-agent-otel`、`llm-agent-flow` 和 `llm-agent-rag`
+- `llm-agent-otel` 依赖 `llm-agent`、`llm-agent-contract`、`llm-agent-rag`
+  和 `llm-agent-flow`（含 `/v2`）
+- `llm-agent-providers` 只依赖 `llm-agent-contract`（早期的 `llm-agent` 边已删）
+- `llm-agent` 只依赖 `llm-agent-contract`——这是它唯一的 `require`。core 不再
+  提供 RAG facade（`llm-agent → llm-agent-rag` 回接边已在 P0-2 于 2026-05-21
+  移除）。「core + contract」合起来才是 stdlib-only 闭包。
+- `llm-agent-contract` 不依赖任何东西（纯 stdlib）
+- `llm-agent-rag` 是框架对齐的检索固定点（fixed point），只依赖
+  `llm-agent-contract`（其可选的 `adapter/llmagent` 子包会另外拉 `llm-agent`）
 
 这形成了一个清晰的分层架构：
 
-1. 基础检索层：`llm-agent-rag`
-2. 核心 agent 抽象层：`llm-agent`
-3. 集成层：`llm-agent-providers`、`llm-agent-otel`
-4. 参考应用层：`llm-agent-customer-support`
+1. 契约层：`llm-agent-contract`（纯 stdlib，共享的 LLM-provider seam）
+2. 核心 agent 抽象层：`llm-agent`（只 require contract）
+3. 检索固定点：`llm-agent-rag`
+4. 集成层：`llm-agent-providers`、`llm-agent-otel`、`llm-agent-flow`
+5. 参考应用层：`llm-agent-customer-support`
 
 ## 子项目分析
 
@@ -185,7 +202,8 @@
 - 检索、图、存储、评测等层都有较完整测试
 - 有 API snapshot 和兼容性文档
 - 有后端 conformance 测试
-- README 明确以 `v1.0` 稳定线定位
+- 以稳定、additive 的 `v1.x` 定位（现为 `main` 上的 v1.11.0；分支已由
+  `master` 更名为 `main`；v1 保持只加不改，breaking change 留给 `/v2` 模块路径）
 
 当前成熟度判断：
 
@@ -198,7 +216,8 @@
 ### 角色定位
 
 `llm-agent-providers` 负责模型供应商适配，把具体厂商 API 转成
-`llm-agent/llm` 所需的统一接口。
+`llm-agent-contract` 定义的 `ChatModel` / capability 接口（它唯一的 require；
+早期的 `llm-agent` 边已删）。
 
 ### 对外能力
 

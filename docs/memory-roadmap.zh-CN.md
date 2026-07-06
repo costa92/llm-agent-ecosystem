@@ -1,5 +1,7 @@
 # 记忆子系统优化路线图：`llm-agent`
 
+> **⚠️ 历史快照（截至 2026-05-25 编写）。** 生态已显著演进（contract 已发布、flow `/v2`、memory `/v2` 多仓化、rag 迁 main 且 v1.11、新增 authz/kb/studio/console 应用仓）。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号/依赖边/子项目数可能已过时。特别地：memory 已从 `llm-agent/memory/` 内联子系统演进为独立多仓 + `/v2` 模块（contract-backed，不再依赖 core）。
+
 > 文档版本：2026-05-25
 > 对应代码快照：2026-05-25
 > 范围：`llm-agent/memory/` 与其和 `context/` 的集成边界

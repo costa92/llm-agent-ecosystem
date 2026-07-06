@@ -1,8 +1,10 @@
 # llm-agent-flow 子项目源码级设计文档
 
+> **⚠️ 历史快照（截至 2026-05-23 编写），只描述 v0.x 的「可序列化 IR + DAG 执行器」root 模块。** **关键更正**：flow 此后已交付独立的 typed-graph **`/v2` 引擎**（当前 v2.2.0），补齐了 **streaming、checkpoint/resume、Loop 构造、durable run 状态持久化**——本文 §10/§11 里列为「未来方向 / v0.2.x 再讨论」的多项能力其实已在 `/v2` 落地（下文就地标注）。root 模块（当前 v0.2.0）与 `/v2`（v2.2.0）并存。**当前权威状态见根 [README](../README.md) 的 roster 与依赖图**；本文的版本号与「未来方向」章节可能已过时。
+
 > 仓库路径：`llm-agent-flow/`
-> 版本范围：v0.0.1（walking skeleton，Phase 1）→ v0.0.9（Phase 9 replay）→ v0.1.0（Phase 10 SemVer 冻结）→ v0.1.1（Phase 11 LRU + 批量持久化）→ v0.1.3（FlowEvent.Metadata，P1-18）→ **v0.1.4**（D3 MetadataAwareTool — `toolNode` 实现 `MetadataAware`，built-in `http` / `exec` 工具实现 `MetadataAwareTool` optional sibling capability）
-> 当前 tag：**v0.1.4**（2026-05-23 v1.3 milestone 闭合）。
+> 版本范围（历史 root 模块）：v0.0.1（walking skeleton，Phase 1）→ v0.0.9（Phase 9 replay）→ v0.1.0（Phase 10 SemVer 冻结）→ v0.1.1（Phase 11 LRU + 批量持久化）→ v0.1.3（FlowEvent.Metadata，P1-18）→ v0.1.4（D3 MetadataAwareTool）
+> 当前 tag：**root v0.2.0 / `/v2` v2.2.0**（历史文档编写时 root 为 v0.1.4）。
 > 代码量：57 个 .go 文件 ≈ 7468 行（含测试），核心 `flow` 包仅 ≈ 1700 行
 > 依赖姿态：核心 `flow` 包 stdlib-only（仅经由 back-edge 引用 `github.com/costa92/llm-agent` 的 `Tool`/`pkg/fanout`），CEL、SQLite、cel-go、modernc.org/sqlite 都是子包按需引入
 
@@ -822,7 +824,7 @@ func New(cfg Config) (*Server, error)                              // v0.0.5+ �
 - 优点：把"流程组合"留在 IR 层，避免在 Tool 里写复杂的"再调用 flow"逻辑；可序列化重放;
 - 缺点：拓扑分层算法要扩展到"动态层"——Loop 的迭代轮次只能运行时决定，可能破坏现有 `[][]string layers` 数据结构；引擎复杂度从 O(N) 退化到 O(N×K) (K=循环次数)，但可控；
 - 风险：SubFlow 引入"flow 间的循环依赖"问题——必须在 Compile 时建立 transitive 引用图检测循环；
-- **建议**：先做 SubFlow（影响小、单元清晰），Loop 留到 v0.2.x 再讨论。预计需要修改 `flow/ir.go` 加新 Node Type + `flow/engine.go` 加 layer-internal expansion + 新增 `FlowLookup` 接口。
+- **建议**：先做 SubFlow（影响小、单元清晰），Loop 留到 v0.2.x 再讨论。预计需要修改 `flow/ir.go` 加新 Node Type + `flow/engine.go` 加 layer-internal expansion + 新增 `FlowLookup` 接口。**（更新：Loop 已在 `/v2` typed-graph 引擎交付。）**
 
 #### A2【M】是否需要 LLM 节点 vs Tool 节点？
 
@@ -978,7 +980,9 @@ flow_engine_cache_hits_total                            Counter
 
 ### 11.2 中期（需要新版本号，v0.2.x）
 
-- **A1 Loop 节点**：要破坏现有 `[][]string layers` 数据结构。
+> **更新：本节多数「中期」能力已在独立的 `/v2` typed-graph 引擎（v2.2.0）交付——包括 Loop 构造、streaming、checkpoint/resume 与 durable run 状态持久化。** 下列条目保留为历史规划记录。
+
+- **A1 Loop 节点**：要破坏现有 `[][]string layers` 数据结构。**（已在 `/v2` 交付。）**
 - **A3 multi-input merge strategy**：要扩 Port 类型。
 - **O4 FlowEvent.Metadata**：要扩 FlowEvent 类型（如果是加字段则 v0.1 兼容；如果改 Output → 字符串|map 则破坏）。
 - **嵌套 Supervisor**：让 `flow.Node` 第一类化"启动一个 Supervisor 跑 N 个 Worker，每个 Worker 是另一个 flow"——这是 K2 与 K3 在 flow 层的最大化协同。
@@ -987,7 +991,7 @@ flow_engine_cache_hits_total                            Counter
 
 - **分布式 Engine**：当前 Engine 是 in-process，所有节点必须跑在同一进程。生产规模下需要：
   - 节点级调度（Kubernetes job / temporal-worker / nomad）；
-  - 状态持久化升级（portValues 现在仅内存，迁移到 Redis / etcd）；
+  - 状态持久化升级（portValues 现在仅内存，迁移到 Redis / etcd）；**（部分已由 `/v2` 的 checkpoint/resume + durable run 状态解决——进程内可持久化恢复；跨机分布式仍是长期方向。）**
   - 事件总线替代 channel（NATS / Kafka）。
   - **这是与 `orchestrate.Supervisor` 的最大边界**——Supervisor 是同步在线 LLM agent 协作（一个 supervisor 进程内）；flow 的分布式版可以驱动多机异步工作流。
 
